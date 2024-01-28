@@ -1,4 +1,5 @@
-# Maybe we can "inject" deps into the task i.e. create some kind of simple built in DI framework
+# TODO: It would be neat to read task comments and types and display these in a UI graph (if a UI is ever built)
+# TODO: Maybe we can "inject" deps into the task i.e. create some kind of simple built in DI framework
 # @task(deps=[])
 # @task should register this function as a task
 def task_1(input):

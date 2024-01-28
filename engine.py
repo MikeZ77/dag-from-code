@@ -14,14 +14,16 @@ from graph import Graph, Edge
 tasks = inspect.getmembers(workflow, predicate=inspect.isfunction)
 source_code = inspect.getsource(workflow.workflow)
 root_node = ast.parse(source_code)
-graph = Graph(task_fns=tasks, draw_mode=False, cpu_cores=4)
+# TODO: The graph would be instantiated from the Flow (is part of the flow), so the flow would be responsible ...
+# For passing the flow input to it. For now just hardcode an input to pass in.
+graph = Graph(tasks, "workflow", False, input=0)
 print(ast.dump(root_node, indent=4))
 
 # An Edge is defined as connecting two adjacent Vertices
 # E.g. Edge: (Node X, Node Y)
 
 edges = {}
-edge_nodes = defaultdict(list)
+edges_ = defaultdict(list)
 isolated_nodes = set()
 nodes = set()
 
@@ -59,18 +61,23 @@ for node in ast.walk(root_node):
             isolated_nodes.add(tail)
             
         
+# Join duplicate edges
+for variable, edge in edges.items():
+   edges_[edge].append(variable) 
+     
+print(edges_)
 
-print(edges)
-for edge in edges.values():
-    graph.add_edge(edge)
+for edge, variables in edges_.items():
+    graph.add_edge(variables, edge)
 
 graph.draw()
 graph.run()
 
-# # Combines multiple edges from and to the same nodes into a single edge
+# Combines multiple edges from and to the same nodes into a single edge
 # for edge_name, edge in edges.items():
 #    edge_nodes[edge].append(edge_name) 
 
 # print(edge_nodes)
+# print()
 
 
