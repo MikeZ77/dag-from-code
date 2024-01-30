@@ -6,7 +6,6 @@ from __future__ import annotations
 #       create the graph seperately and inject it into the Flow from engine.py ...
 #       maybe TaskDict should actually be the graph and perform the graph like functions
 
-import os
 import networkx as nx
 import matplotlib.pyplot as plt
 import multiprocessing as mp
@@ -26,14 +25,18 @@ class Edge:
 # TODO: There needs to be Task and Flow STATES
 # The state objects get returned through the message
 @dataclass
-class TaskEndMessage:
-    pid: int
+class Message:
     task: Task
 
-@dataclass
-class TaskStartMessage:
-    pid: int
-    task: Task
+# @dataclass
+# class TaskEndMessage:
+#     pid: int
+#     task: Task
+
+# @dataclass
+# class TaskStartMessage:
+#     pid: int
+#     task: Task
     
 # TODO: Also make this a context manager
 # Have it create the processes and Queue
@@ -63,12 +66,11 @@ class ProcessPoolIterator(Iterator):
         return self
     
     def __next__(self) -> Process | None:
-        while self.item < self.busy and self.busy[self.item]:
+        while self.busy[self.item]:
             self.item += 1
         
         if self.item >= len(self.processes):
-            return None
-            # raise StopIteration
+            raise StopIteration
             
         return self.processes[self.item]
     
@@ -100,7 +102,7 @@ class Task:
         # TODO: we need to differentiate between *args and **kwargs
         # {"variable_name_1": payload, "variable_name_2": payload ...} 
         self.inputs = {}
-        self.outputs = {}
+        self.outputs: dict | None = None
         # We need to return a payload with the name of the variables. So the output of fn can be mapped to self.outputs.
         self.output_variables = [] # [variable_name_1, variable_name_2]
         
@@ -117,7 +119,7 @@ class Task:
     
 class Graph:
     """A flow has a Graph representation of Tasks as nodes"""
-    def __init__(self, task_fns, flow_name: str, draw_mode = False, cpu_cores = None, **flow_input):
+    def __init__(self, task_fns, flow_name: str, draw_mode = False, cpu_cores = None, flow_input = dict()):
         # TODO: it should not be possible to create a cycle ...
         # if the same task is called multiple times give it a sequence number e.g. my_task-0 ... my_task-n
         self.task_fns = dict(task_fns)
@@ -134,7 +136,7 @@ class Graph:
         tail_task: Task = self.graph[tail]
         
         self.graph[head_task].add(tail_task)
-        tail_task.inputs = variables
+        tail_task.inputs = {var: None for var in variables}
         head_task.output_variables.extend(variables)
         
         if self.draw_mode:
@@ -155,35 +157,44 @@ class Graph:
                     task.inputs[variable] = self.flow_input[variable]
      
     def get_entry_tasks(self) -> list[Task]:
-        return [task for task in self.graph.keys() if not task.inputs]
+        return [task for task in self.graph.keys() if not task.inputs and task.task_name != self.flow_name]
     
-    def create_process_pool(self) -> tuple[ProcessPool, Queue, Queue]:
-        task_create_queue, task_end_queue = Queue(), Queue()
-        processes_pool = ProcessPool([Process(target=self.wait_for_task, args=(task_create_queue, task_end_queue)) for _  in range(self.pool_size)])
-        return processes_pool, task_create_queue, task_end_queue
+    def create_process_pool(self) -> tuple[ProcessPool, Queue, dict[int, Queue]]:
+        # TODO: Each proccess actually needs it own queue, since the is no option to peek the queue before dequeing using queue.get()
+        end_queue = Queue()
+        process_queues = {}
+        processes_pool = []
+        for _ in range(self.pool_size):
+            process_queue = Queue()
+            process = Process(target=self.wait_for_task, args=(process_queue, end_queue))
+            process_queues[process.name] = process_queue
+            processes_pool.append(process)
+        
+        return ProcessPool(processes_pool), end_queue, process_queues
+        
+
+    def check_task_has_all_inputs(self):
+        ...
 
     def check_flow_run_complete(self) -> bool:
         ...
         
     @staticmethod
-    def wait_for_task(task_create_queue: Queue, task_end_queue: Queue):
-        pid = os.getpid() # We can also pass the pid as a param
-        # message_queue.put("Created process: " + str(num))
-        while message := task_create_queue.get():
-            if isinstance(message, TaskStartMessage) and message.pid == pid:
-                task = message.task
-                inputs = task.inputs
-                fn = task.fn
-                
-                # Note inputs assumes only *args and not **kwargs currently
-                output = fn(*inputs)
+    def wait_for_task(process_queue: Queue[Message], end_queue: Queue[Message]):
+        while message := process_queue.get():
+            task = message.task
+            inputs, output_variables, fn = task.inputs, task.output_variables, task.fn
+            # TODO: Note inputs assumes only *args and not **kwargs currently
+            output = fn(*inputs)
 
-                if isinstance(output, tuple):
-                    # output_variables
-                    ...
-                    
-                    
-                task_end_queue.put(TaskEndMessage(pid, output))
+            # TODO: Create a setter for task.outputs instead of having this here
+            if isinstance(output, tuple):
+                task.outputs = dict(zip(output, output_variables))
+            elif output:
+                [output_variables] = output_variables
+                task.outputs = {output_variables: output}
+                
+            end_queue.put(Message(task))
 
     
     def run(self):
@@ -196,42 +207,45 @@ class Graph:
         #   c. Set the busy flag in the process_pool for that process to True
         
         # ...
-        
-        # Create process pool
-        processes_pool, task_create_queue, task_end_queue = self.create_process_pool()
-        processes_pool.start()     
-        
-        # Set task input for tasks that are tail nodes to the flow input
-        self.set_flow_input()
-
-        # Get entrypoint tasks that have in-deg = 0
-        entry_tasks = self.get_entry_tasks()
-        
-        processes = iter(processes_pool)
-        for task in entry_tasks:
-            process = next(processes)
-            task_create_queue.put(TaskStartMessage(process.pid, task))
+        try:
+            # Create process pool
+            processes_pool, end_queue, process_queues = self.create_process_pool()
+            processes_pool.start()     
             
+            # Set task input for tasks that are tail nodes to the flow input
+            self.set_flow_input()
 
-        while message := task_end_queue.get():
-            if isinstance(message, TaskEndMessage):
+            # Get entrypoint tasks that have in-deg = 0
+            entry_tasks = self.get_entry_tasks()
+            
+            processes = iter(processes_pool)
+            for task in entry_tasks:
+                process = next(processes, None)
+                queue = process_queues[process.name]
+                queue.put(Message(task))
+                
+
+            count = 0
+            while message := end_queue.get():
                 print(message)
+                count += 1
                 
-            if self.check_flow_run_complete():
-                break
+                # For testing
+                if count > 0:
+                    break
+                    
+                if self.check_flow_run_complete():
+                    ...
+                    
+        except Exception as e:
+            print(e)
+        finally:              
+            # Cleanup
+            # TODO: Add this to context manager
+            for queue in process_queues.values():
+                queue.close()
+                queue.join_thread() # Find out why/if join thread is needed
 
-        # # Wait for process to finish task
-        # count = 1
-        # while output := self.message_queue.get():
-        #     print(output)
-        #     count += 1
-        #     if count > self.pool_size:
-        #         break
-                
-        # Cleanup
-        # TODO: Add this to context manager
-        task_create_queue.close()
-        task_end_queue.close()
-        task_create_queue.join_thread()
-        task_end_queue.join_thread()
-        processes_pool.end()
+            end_queue.close()
+            end_queue.join_thread()
+            processes_pool.end()
