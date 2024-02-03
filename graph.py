@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import multiprocessing as mp
 
-from typing import Callable
+from enum import Enum, auto
+from typing import Callable, Any
 from collections import UserDict 
 from graphviz import Digraph
+from collections import deque
 from collections.abc import Iterable, Iterator
 from multiprocessing import Process, Queue
-from queue import Queue as Queue_
 from dataclasses import dataclass
 
 
@@ -24,9 +25,20 @@ class Edge:
 
 # TODO: There needs to be Task and Flow STATES
 # The state objects get returned through the message
-# @dataclass
-# class Message:
-#     task: Task
+# Eg ...
+
+class TaskState(Enum):
+    PENDING = auto()
+    RUNNING = auto()
+    SUCCESS = auto()
+    FAILED = auto()
+    RETRYING = auto()
+
+@dataclass
+class TaskData:
+    state: TaskState
+    result: Any
+    message: str
 
 @dataclass
 class TaskEndMessage:
@@ -130,9 +142,13 @@ class TaskDict(UserDict):
         
 
 class Task:
+    # TODO: # A task should take a wait_for arg s.t. it waits for those listed tasks to finish
     def __init__(self, name: str, fn: Callable):
         self.task_name = name
         self.fn = fn 
+        # For now, we just have state complete and not complete ...
+        # until and actual state system is implemented
+        self.state = False
         # TODO: we need to differentiate between *args and **kwargs
         # {"variable_name_1": payload, "variable_name_2": payload ...} 
         self.inputs = {}
@@ -152,6 +168,8 @@ class Task:
         ...
         
     def async_map():
+        # TODO: The plan for this is to run coroutines on the event loop ...
+        # expects an Iterable
         ...
     
     def run(self):
@@ -166,7 +184,7 @@ class Graph:
         self.flow_name = flow_name
         self.flow_input = flow_input
         self.graph: dict[Task, set[Task]] = TaskDict({Task(name, fn): set() for name, fn in task_fns})
-        self.waiting_tasks = Queue_()
+        self.waiting_tasks: deque[Task] = deque([])
         self.pool_size = mp.cpu_count() if not cpu_cores else cpu_cores
         
     def add_edge(self, variables: list[str], edge: Edge):
@@ -200,7 +218,7 @@ class Graph:
         return flow_task
         
     def get_entry_tasks(self) -> set[Task]:
-        return set(task for task in self.graph.keys() if not task.inputs and task.task_name != self.flow_name)
+        return set(task for task in self.graph if not task.inputs and task.task_name != self.flow_name)
     
 
     def pass_outputs_to_next_task(self, task: Task):
@@ -214,16 +232,31 @@ class Graph:
         return all(input for input in task.inputs.values())
     
     def submit_next_task(self, tasks: set[Task], pool: ProcessPool):
-        # TODO: If process is None (i.e. there is no available process) add this to a backlog queue.
         processes = iter(pool)    
         for next_task in tasks:
-            if self.is_task_ready(next_task):
-                process = next(processes, None)
+            if not self.is_task_ready(next_task):
+                continue
+                
+            process = next(processes, None)
+            # There is no ready process available
+            if not process:
+                self.waiting_tasks.append(next_task)
+            # Queue the next task to start
+            else:
                 queue = pool.process_queues[process.name]
                 queue.put(TaskStartMessage(next_task))
-        
+
+    
+    def submit_waiting_tasks(self, pool: ProcessPool):
+        for _ in range(len(self.waiting_tasks)):
+            # TODO: This needs to be tested
+            task = set(self.waiting_tasks.popleft())
+            self.submit_next_task(task, pool)
+            
+
     def flow_run_complete(self) -> bool:
-        ...
+        return all(task.state for task in self.graph if task.task_name != self.flow_name)
+            
         
     @staticmethod
     def wait_for_task(process_queue: Queue[TaskStartMessage], end_queue: Queue[TaskEndMessage]):
@@ -245,20 +278,16 @@ class Graph:
             elif output:
                 [output_variables] = output_variables
                 task.outputs = {output_variables: output}
-                
+            
+            # TODO: The task passed in and out of the queue does not have the same mememory address ...
+            # so we cannot use this task in any way on the main thread.
+            # To avoid confusion it might be a better idea to only pass the data that needs to be updated ...
+            # in that task instead of the task object itself.
             end_queue.put(TaskEndMessage(process_name, task))
 
     
     def run(self):
-        # TODO: A Task is run once all its inputs have been recieved
-        # 1. message_queue.get() returns message: {pid: 1234, task_name: "task_one", output: {out_one: 123, out_two: "abc"}} (dataclass) 
-        # 2. Set the busy flag in the process_pool for that process to False
-        # 2. then iterate through "task_one" 's children:
-        #   a. for the task, check if it has the corresponding input and set it.
-        #   b. if all inputs are set, then the task is ready to be run 
-        #   c. Set the busy flag in the process_pool for that process to True
-        
-        # ...
+
         with ProcessPool(self.pool_size) as pool:
             # Set task input for tasks that are tail nodes to the flow input
             flow_task = self.set_flow_input()
@@ -271,20 +300,19 @@ class Graph:
             self.submit_next_task(self.graph[flow_task], pool)
        
             while message := pool.end_queue.get():
-                # message = pool.end_queue.get()
                 # Set the process as free/not busy
                 pool.free_process(message.process_name)
+                # There is at least one free process available, so submit any waiting tasks
+                self.submit_waiting_tasks(pool)
 
-                # TODO: Every time we get a completed task, a process is free'd up ...
-                # check if there are any backlogged_tasks first and run it.
-                # For testing
                 task = message.task
-                                                
+                self.graph[task.task_name].state = True # Temporary
                 self.pass_outputs_to_next_task(task)
                 self.submit_next_task(self.graph[task], pool)
                 
-                # if self.flow_run_complete():
-                #     ...
+                if self.flow_run_complete():
+                    break
+    
         
 if __name__ == "__main__":
       import engine      

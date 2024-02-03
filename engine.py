@@ -1,4 +1,3 @@
-# TODO: # A task should take a wait_for arg s.t. it waits for those listed tasks to finish
 # TODO: This file should "orchistrate" the entire flow run in steps. See the pipeline dp: ...
 # https://learn.microsoft.com/en-us/previous-versions/msp-n-p/ff963548(v=pandp.10)?redirectedfrom=MSDN
 
@@ -10,7 +9,7 @@ from typing import Any
 from collections import defaultdict
 from graph import Graph, Edge
     
-# TODO: Instead of this, the functions should be "registered"  
+# TODO: Instead of this, the task functions should be "registered" in some kind of context  
 # Likewise, engine.py would be called from the flow function registered @flow instead of "import workflow"   
 tasks = inspect.getmembers(workflow, predicate=inspect.isfunction)
 source_code = inspect.getsource(workflow.workflow)
