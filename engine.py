@@ -17,7 +17,7 @@ source_code = inspect.getsource(workflow.workflow)
 tree = ast.parse(source_code)
 # TODO: The graph would be instantiated from the Flow (is part of the flow), so the flow would be responsible ...
 # For passing the flow input to it. For now just hardcode an input to pass in.
-graph = Graph(task_fns=tasks, flow_name="workflow", cpu_cores=4, flow_input={"input": 0})
+graph = Graph(task_fns=tasks, flow_name="workflow", cpu_cores=4, flow_input={"input": 2})
 print(ast.dump(tree, indent=4))
 
 class BuildDAG(ast.NodeVisitor):

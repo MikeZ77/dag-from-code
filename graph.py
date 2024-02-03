@@ -24,19 +24,22 @@ class Edge:
 
 # TODO: There needs to be Task and Flow STATES
 # The state objects get returned through the message
+# @dataclass
+# class Message:
+#     task: Task
+
 @dataclass
-class Message:
+class TaskEndMessage:
+    process_name: str
     task: Task
 
-# @dataclass
-# class TaskEndMessage:
-#     pid: int
-#     task: Task
-
-# @dataclass
-# class TaskStartMessage:
-#     pid: int
-#     task: Task
+@dataclass
+class TaskStartMessage:
+    task: Task
+    
+@dataclass
+class ProcessEndMessage:
+    ...
 
 # TODO: Also make this a context manager
 # Have it create the processes and Queue
@@ -45,8 +48,8 @@ class ProcessPool(Iterable):
         self.pool_size = pool_size
         self.processes: list[Process] = []
         self.busy: list[bool] = []
-        self.end_queue: Queue[Message] = None
-        self.process_queues: dict[str, Queue[Message]] = {}
+        self.end_queue: Queue[TaskEndMessage] = None
+        self.process_queues: dict[str, Queue[TaskStartMessage]] = {}
     
     def create_process_pool(self):
         self.end_queue = Queue()
@@ -59,6 +62,9 @@ class ProcessPool(Iterable):
 
         self.busy = [False] * len(self.processes)
 
+    def free_process(self, process_name: str):
+        idx = next( idx for idx, process in enumerate(self.processes) if process.name == process_name)
+        self.busy[idx] = False
         
     def __iter__(self):
         return ProcessPoolIterator(self.processes, self.busy)
@@ -72,6 +78,11 @@ class ProcessPool(Iterable):
         return self
         
     def __exit__(self, exc_type, exc_value, traceback):
+        print(exc_value)
+        
+        for queue in self.process_queues.values():
+            queue.put(ProcessEndMessage())
+        
         for process in self.processes:
             process.join()
         
@@ -98,7 +109,8 @@ class ProcessPoolIterator(Iterator):
         
         if self.item >= len(self.processes):
             raise StopIteration
-            
+        
+        self.busy[self.item] = True
         return self.processes[self.item]
     
 
@@ -136,6 +148,12 @@ class Task:
     def __hash__(self):
         return hash(self.task_name)
     
+    def map():
+        ...
+        
+    def async_map():
+        ...
+    
     def run(self):
         ...
     
@@ -172,54 +190,63 @@ class Graph:
         
         graph.render(self.flow_name, cleanup=True)
 
-    def set_flow_input(self):
+    def set_flow_input(self) -> Task:
         flow_task: Task = self.graph[self.flow_name]
         for task in self.graph[flow_task]:
             for variable, _ in task.inputs.items():
                 if variable in self.flow_input:
                     task.inputs[variable] = self.flow_input[variable]
-     
+
+        return flow_task
+        
     def get_entry_tasks(self) -> set[Task]:
         return set(task for task in self.graph.keys() if not task.inputs and task.task_name != self.flow_name)
     
 
     def pass_outputs_to_next_task(self, task: Task):
         for next_task in self.graph[task]:
-            next_task.inputs = dict(next_task.inputs & next_task.outputs)
+            next_task.inputs = {**next_task.inputs, **task.outputs}
                 
-    def is_task_ready(self, task: Task, pool: ProcessPool) -> bool:
-        # TODO: Technically user could return None in a variable and this would not work ...
+    def is_task_ready(self, task: Task) -> bool:
+        # TODO: Technically user could return None or 0 in a variable and this would not work ...
         #       I think the plan is to return an object that contains STATE and data.
+        # This still returns True for no inputs
         return all(input for input in task.inputs.values())
     
     def submit_next_task(self, tasks: set[Task], pool: ProcessPool):
-        # TODO: If process is None (i.e. there is no waiting process) add this to a waiting_tasks queue.
+        # TODO: If process is None (i.e. there is no available process) add this to a backlog queue.
         processes = iter(pool)    
         for next_task in tasks:
             if self.is_task_ready(next_task):
                 process = next(processes, None)
                 queue = pool.process_queues[process.name]
-                queue.put(Message(next_task))
+                queue.put(TaskStartMessage(next_task))
         
     def flow_run_complete(self) -> bool:
         ...
         
     @staticmethod
-    def wait_for_task(process_queue: Queue[Message], end_queue: Queue[Message]):
+    def wait_for_task(process_queue: Queue[TaskStartMessage], end_queue: Queue[TaskEndMessage]):
+        process_name = mp.current_process().name
+        
         while message := process_queue.get():
+
+            if isinstance(message, ProcessEndMessage):
+                break
+        
             task = message.task
             inputs, output_variables, fn = task.inputs, task.output_variables, task.fn
             # TODO: Note inputs assumes only *args and not **kwargs currently
-            output = fn(*inputs)
+            output = fn(**inputs)
 
             # TODO: Create a setter for task.outputs instead of having this here
             if isinstance(output, tuple):
-                task.outputs = dict(zip(output, output_variables))
+                task.outputs = dict(zip(output_variables, output))
             elif output:
                 [output_variables] = output_variables
                 task.outputs = {output_variables: output}
                 
-            end_queue.put(Message(task))
+            end_queue.put(TaskEndMessage(process_name, task))
 
     
     def run(self):
@@ -234,31 +261,32 @@ class Graph:
         # ...
         with ProcessPool(self.pool_size) as pool:
             # Set task input for tasks that are tail nodes to the flow input
-            self.set_flow_input()
+            flow_task = self.set_flow_input()
             
             # Get entrypoint tasks that have in-deg = 0
             entry_tasks = self.get_entry_tasks()
             
             # Start the entry point tasks
             self.submit_next_task(entry_tasks, pool)
+            self.submit_next_task(self.graph[flow_task], pool)
        
-            count = 0
             while message := pool.end_queue.get():
+                # message = pool.end_queue.get()
+                # Set the process as free/not busy
+                pool.free_process(message.process_name)
+
                 # TODO: Every time we get a completed task, a process is free'd up ...
-                # check if there are any waiting_tasks first and run it.
+                # check if there are any backlogged_tasks first and run it.
                 # For testing
-                print(message)
-                count += 1
-                
-                if count > 0:
-                    break
-                
                 task = message.task
                                                 
                 self.pass_outputs_to_next_task(task)
-                self.submit_next_task(self.graph[task])
+                self.submit_next_task(self.graph[task], pool)
                 
-                if self.flow_run_complete():
-                    ...
+                # if self.flow_run_complete():
+                #     ...
         
+if __name__ == "__main__":
+      import engine      
+
 

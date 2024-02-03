@@ -12,7 +12,7 @@ def task_2(a):
     print("Task_2")
     return 1, 2
 
-def task_3():
+def task_3(input):
     print("Task_3")
 
 def task_4(b, c):
@@ -30,4 +30,4 @@ def workflow(input: int):
     
     
 if __name__ == "__main__":
-    workflow(0)
+    workflow(2)
