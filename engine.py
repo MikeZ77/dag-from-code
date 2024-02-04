@@ -1,110 +1,42 @@
-# TODO: This file should "orchistrate" the entire flow run in steps. See the pipeline dp: ...
-# https://learn.microsoft.com/en-us/previous-versions/msp-n-p/ff963548(v=pandp.10)?redirectedfrom=MSDN
+# This file servers as the entry point for the flow run
 
-import ast
-import inspect
-import workflow
+from context import execution_context as ctx
+from task import Task
+from graph import BuildGraph
 
-from typing import Any
-from collections import defaultdict
-from graph import Graph, Edge
-    
-# TODO: Instead of this, the task functions should be "registered" in some kind of context  
-# Likewise, engine.py would be called from the flow function registered @flow instead of "import workflow"   
-tasks = inspect.getmembers(workflow, predicate=inspect.isfunction)
-source_code = inspect.getsource(workflow.workflow)
-tree = ast.parse(source_code)
-# TODO: The graph would be instantiated from the Flow (is part of the flow), so the flow would be responsible ...
-# For passing the flow input to it. For now just hardcode an input to pass in.
-graph = Graph(task_fns=tasks, flow_name="workflow", cpu_cores=4, flow_input={"input": 2})
-print(ast.dump(tree, indent=4))
+def task(__fn):
+    # TODO: This should create the Task but for now lets just register the task fn
+    # TODO: Validate a task is not being called from within a task
+    task = Task(__fn.__name__, __fn)
+    ctx.register_task(task)
 
-class BuildDAG(ast.NodeVisitor):
-    def __init__(self):
-        self.head_nodes = defaultdict(list)       # "task_2": ["a"]
-        self.tail_nodes = defaultdict(list)       # "a": ["task_3"]
-        self.edges = defaultdict(list)            # Edge(head='task_1', tail='task_2'): ['a']
-        self.isolated_nodes = set()               # "task_4"
-    
-    def visit_FunctionDef(self, node):
-        # TODO: Validate that this is a flow function
-        args: ast.arguments = node.args
-        fn_args: list[ast.arg] = args.args
-        fn_name = node.name
+
+# Flow arguments can be setup here
+def flow(*, name: str = None, cpu_cores: int = 4, draw: bool = False): 
+    def execute(__fn=None, *args, **kwargs):
+        nonlocal name
         
-        self.head_nodes[fn_name] = [arg.arg for arg in fn_args]
-        self.generic_visit(node)
+        if not name:
+            name = __fn.__name__
         
-    def visit_Assign(self, node):
-        # An Assign creates a head Node and can also be a tail Node
-        assignor: Any  = node.value
-        assignee: ast.Name | ast.Tuple = node.targets[0]
-
-        # This cannot be a Task since the assingnor is not a function call
-        # TODO: Validate that this function is a task
-        if not isinstance(assignor, ast.Call):
-            return
+        # For the purposes of creating the graph, a flow taks is also created
+        ctx.register_flow(__fn)
+        ctx.register_task(Task(__fn.__name__, __fn))
+        # TODO: Read all imports/dependencies into context (I think) so the child process can load them.
+        # NOTE: This would not need to be done with threading since threads share the same memory space.
+        print()
+        graph = BuildGraph.from_code()
         
-        fn: ast.Name = assignor.func
-        fn_name = fn.id
-        fn_args: list[ast.Name] = assignor.args
+        if draw:
+            graph.draw(name)
         
-        # The head node has out-deg > 1
-        if isinstance(assignee, ast.Tuple):
-            names: list[ast.Name] = assignee.elts
-            variables = [name.id for name in names]
-            self.head_nodes[fn_name].extend(variables)
-
-        # The head node has out-deg == 1
-        if isinstance(assignee, ast.Name):
-            self.head_nodes[fn_name].append(assignee.id)
         
-        # Check if this head node is also a tail node (has params)
-        if fn_args:
-            for param in fn_args:
-                self.tail_nodes[param.id].append(fn_name)
-            
-        self.generic_visit(node)
+        # NOTE: Placeholder, since the client does not actually run the code.
+        # Later, it might be useful to have the client run some callback like all_complete or any_failed
+        def empty_callable():
+            ...
         
-    def visit_Expr(self, node):
-       
-        if not isinstance(node.value, ast.Call):
-            return
+        return empty_callable
         
-        func: ast.Name = node.value.func
-        fn_args: list[ast.Name] = node.value.args
-        fn_name = func.id
         
-        # The node is a tail node
-        if fn_args:
-            for param in fn_args:
-                self.tail_nodes[param.id].append(fn_name)
-            
-        # TODO: I dont think we need this since the graph has access to the tasks ...
-        # and can determine if a node is isolated.
-        else:
-            self.isolated_nodes.add(fn_name)
-            
-        self.generic_visit(node)
-    
-    def construct_edges(self):
-        for head_node, edge_names in self.head_nodes.items():
-            for edge_name in edge_names:
-                tail_nodes = self.tail_nodes[edge_name]
-                for tail_node in tail_nodes:
-                    edge = Edge(head=head_node, tail=tail_node)
-                    self.edges[edge].append(edge_name)
-
-
-visitor = BuildDAG()
-visitor.visit(tree)
-visitor.construct_edges()
-
-for edge, variables in visitor.edges.items():
-    graph.add_edge(variables, edge)
-
-graph.draw()
-graph.run()
-
-
-
+    return execute

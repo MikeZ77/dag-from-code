@@ -1,320 +1,213 @@
-from __future__ import annotations
+# TODO: This file should "orchistrate" the entire flow run in steps. See the pipeline dp: ...
+# https://learn.microsoft.com/en-us/previous-versions/msp-n-p/ff963548(v=pandp.10)?redirectedfrom=MSDN
 
-# TODO: Automate the number of processes created by checking for bottlenecks (max number of siblings) using BFS
-# TODO: Allow the engine to use either processes or threads based on user preference
-# TODO: The "Graph" is really the "Flow". However, this may be too much functionality. It may make sense to ...
-#       create the graph seperately and inject it into the Flow from engine.py ...
-#       maybe TaskDict should actually be the graph and perform the graph like functions
+import ast
+import inspect
+# import workflow
 
-import multiprocessing as mp
-
-from enum import Enum, auto
-from typing import Callable, Any
-from collections import UserDict 
 from graphviz import Digraph
-from collections import deque
-from collections.abc import Iterable, Iterator
-from multiprocessing import Process, Queue
+from typing import Any, Type
+from collections import defaultdict, abc
 from dataclasses import dataclass
+from context import execution_context as ctx
+from task import Task
+# from flow import Flow, Edge
+    
+# TODO: Instead of this, the task functions should be "registered" in some kind of context  
+# Likewise, engine.py would be called from the flow function registered @flow instead of "import workflow"   
+# tasks = inspect.getmembers(workflow, predicate=inspect.isfunction)
+# source_code = inspect.getsource(workflow.workflow)
+# tree = ast.parse(source_code)
+# # TODO: The graph would be instantiated from the Flow (is part of the flow), so the flow would be responsible ...
+# # For passing the flow input to it. For now just hardcode an input to pass in.
+# graph = Flow(task_fns=tasks, flow_name="workflow", cpu_cores=4, flow_input={"input": 2})
+# print(ast.dump(tree, indent=4))
+
+class BuildDAG(ast.NodeVisitor):
+    def __init__(self):
+        self.head_nodes = defaultdict(list)       # "task_2": ["a"]
+        self.tail_nodes = defaultdict(list)       # "a": ["task_3"]
+        self.edges = defaultdict(list)            # Edge(head='task_1', tail='task_2'): ['a']
+        self.isolated_nodes = set()               # "task_4"
+    
+    def visit_FunctionDef(self, node):
+        # TODO: Validate that this is a flow function
+        args: ast.arguments = node.args
+        fn_args: list[ast.arg] = args.args
+        fn_name = node.name
+        
+        self.head_nodes[fn_name] = [arg.arg for arg in fn_args]
+        self.generic_visit(node)
+        
+    def visit_Assign(self, node):
+        # An Assign creates a head Node and can also be a tail Node
+        assignor: Any  = node.value
+        assignee: ast.Name | ast.Tuple = node.targets[0]
+
+        # This cannot be a Task since the assingnor is not a function call
+        # TODO: Validate that this function is a task
+        if not isinstance(assignor, ast.Call):
+            return
+        
+        fn: ast.Name = assignor.func
+        fn_name = fn.id
+        fn_args: list[ast.Name] = assignor.args
+        
+        # The head node has out-deg > 1
+        if isinstance(assignee, ast.Tuple):
+            names: list[ast.Name] = assignee.elts
+            variables = [name.id for name in names]
+            self.head_nodes[fn_name].extend(variables)
+
+        # The head node has out-deg == 1
+        if isinstance(assignee, ast.Name):
+            self.head_nodes[fn_name].append(assignee.id)
+        
+        # Check if this head node is also a tail node (has params)
+        if fn_args:
+            for param in fn_args:
+                self.tail_nodes[param.id].append(fn_name)
+            
+        self.generic_visit(node)
+        
+    def visit_Expr(self, node):
+       
+        if not isinstance(node.value, ast.Call):
+            return
+        
+        func: ast.Name = node.value.func
+        fn_args: list[ast.Name] = node.value.args
+        fn_name = func.id
+        
+        # The node is a tail node
+        if fn_args:
+            for param in fn_args:
+                self.tail_nodes[param.id].append(fn_name)
+            
+        # TODO: I dont think we need this since the graph has access to the tasks ...
+        # and can determine if a node is isolated.
+        else:
+            self.isolated_nodes.add(fn_name)
+            
+        self.generic_visit(node)
+    
+    def construct_edges(self):
+        for head_node, edge_names in self.head_nodes.items():
+            for edge_name in edge_names:
+                tail_nodes = self.tail_nodes[edge_name]
+                for tail_node in tail_nodes:
+                    edge = Edge(head=head_node, tail=tail_node)
+                    self.edges[edge].append(edge_name)
+
+
+# visitor = BuildDAG()
+# visitor.visit(tree)
+# visitor.construct_edges()
+
+# for edge, variables in visitor.edges.items():
+#     graph.add_edge(variables, edge)
+
+# graph.draw()
+# graph.run()
+
+
+# TODO: This should probably be a collections.abc instead of a dict override.
+#       That way we can provide iterators for traversing the graph in different ways ...
+#       and create methods like get_task(), get_children(), etc. 
+# class TaskDict(UserDict):
+#     def __init__(self, data: dict[Task, set], **kwargs):
+#         # maps task_name to Task which is the key for data
+#         self.task_map = {task.task_name: task for task in data.keys()}
+#         super().__init__(data, **kwargs)
+    
+#     def __getitem__(self, key):
+#         if isinstance(key, str):
+#             return self.task_map[key]
+#         return self.data[key]
+
+
+class ValidateDAG(ast.NodeVisitor):
+    ...
 
 
 @dataclass(eq=True, frozen=True)
 class Edge:
     head: str
-    tail: str   
+    tail: str  
 
-# TODO: There needs to be Task and Flow STATES
-# The state objects get returned through the message
-# Eg ...
 
-class TaskState(Enum):
-    PENDING = auto()
-    RUNNING = auto()
-    SUCCESS = auto()
-    FAILED = auto()
-    RETRYING = auto()
-
-@dataclass
-class TaskData:
-    state: TaskState
-    result: Any
-    message: str
-
-@dataclass
-class TaskEndMessage:
-    process_name: str
-    task: Task
-
-@dataclass
-class TaskStartMessage:
-    task: Task
-    
-@dataclass
-class ProcessEndMessage:
-    ...
-
-# TODO: Also make this a context manager
-# Have it create the processes and Queue
-class ProcessPool(Iterable):
-    def __init__(self, pool_size: int):
-        self.pool_size = pool_size
-        self.processes: list[Process] = []
-        self.busy: list[bool] = []
-        self.end_queue: Queue[TaskEndMessage] = None
-        self.process_queues: dict[str, Queue[TaskStartMessage]] = {}
-    
-    def create_process_pool(self):
-        self.end_queue = Queue()
+class TaskGraph(abc.Mapping):
+    def __init__(self, graph: dict[Task, set[Task]]):
+        self.graph = graph
         
-        for _ in range(self.pool_size):
-            process_queue = Queue()
-            process = Process(target=Graph.wait_for_task, args=(process_queue, self.end_queue))
-            self.process_queues[process.name] = process_queue
-            self.processes.append(process)
-
-        self.busy = [False] * len(self.processes)
-
-    def free_process(self, process_name: str):
-        idx = next( idx for idx, process in enumerate(self.processes) if process.name == process_name)
-        self.busy[idx] = False
-        
-    def __iter__(self):
-        return ProcessPoolIterator(self.processes, self.busy)
-    
-    def __enter__(self):
-        self.create_process_pool()
-        
-        for process in self.processes:
-            process.start()
-            
-        return self
-        
-    def __exit__(self, exc_type, exc_value, traceback):
-        print(exc_value)
-        
-        for queue in self.process_queues.values():
-            queue.put(ProcessEndMessage())
-        
-        for process in self.processes:
-            process.join()
-        
-        for queue in self.process_queues.values():
-            queue.close()
-            queue.join_thread() # Find out why/if join thread is needed
-
-        self.end_queue.close()
-        self.end_queue.join_thread()
-
-
-class ProcessPoolIterator(Iterator):
-    def __init__(self, processes, busy):
-        self.processes = processes
-        self.busy = busy
-        self.item = 0
-        
-    def __iter__(self):
-        return self
-    
-    def __next__(self) -> Process | None:
-        while self.busy[self.item]:
-            self.item += 1
-        
-        if self.item >= len(self.processes):
-            raise StopIteration
-        
-        self.busy[self.item] = True
-        return self.processes[self.item]
-    
-
-# TODO: This should probably be a collections.abc instead of a dict override.
-#       That way we can provide iterators for traversing the graph in different ways ...
-#       and create methods like get_task(), get_children(), etc. 
-class TaskDict(UserDict):
-    def __init__(self, data: dict[Task, set], **kwargs):
-        # maps task_name to Task which is the key for data
-        self.task_map = {task.task_name: task for task in data.keys()}
-        super().__init__(data, **kwargs)
-    
     def __getitem__(self, key):
-        if isinstance(key, str):
-            return self.task_map[key]
-        return self.data[key]
+        ...
+        
+    def __iter__(self):
+        ...
+        
+    def __len__(self):
+        ...
         
 
-class Task:
-    # TODO: # A task should take a wait_for arg s.t. it waits for those listed tasks to finish
-    def __init__(self, name: str, fn: Callable):
-        self.task_name = name
-        self.fn = fn 
-        # For now, we just have state complete and not complete ...
-        # until and actual state system is implemented
-        self.state = False
-        # TODO: we need to differentiate between *args and **kwargs
-        # {"variable_name_1": payload, "variable_name_2": payload ...} 
-        self.inputs = {}
-        self.outputs: dict | None = None
-        # We need to return a payload with the name of the variables. So the output of fn can be mapped to self.outputs.
-        self.output_variables = [] # [variable_name_1, variable_name_2]
-        
-    def __eq__(self, other):
-        if isinstance(other, self.__class__):
-            return self.task_name == other.task_name
-        return False
-
-    def __hash__(self):
-        return hash(self.task_name)
-    
-    def map():
-        ...
-        
-    def async_map():
-        # TODO: The plan for this is to run coroutines on the event loop ...
-        # expects an Iterable
-        ...
-    
-    def run(self):
-        ...
-    
 class Graph:
-    """A flow has a Graph representation of Tasks as nodes"""
-    def __init__(self, task_fns, flow_name: str, cpu_cores = None, flow_input = dict()):
-        # TODO: it should not be possible to create a cycle ...
-        #       if the same task is called multiple times give it a sequence number e.g. my_task-0 ... my_task-n
-        self.task_fns = dict(task_fns)
-        self.flow_name = flow_name
-        self.flow_input = flow_input
-        self.graph: dict[Task, set[Task]] = TaskDict({Task(name, fn): set() for name, fn in task_fns})
-        self.waiting_tasks: deque[Task] = deque([])
-        self.pool_size = mp.cpu_count() if not cpu_cores else cpu_cores
-        
+
+    def __init__(self, tasks: list[Task]):
+        self._graph: TaskGraph = TaskGraph({task: set() for task in tasks})
+
+   
     def add_edge(self, variables: list[str], edge: Edge):
         head, tail = edge.head, edge.tail
-        head_task: Task = self.graph[head]
-        tail_task: Task = self.graph[tail]
+        head_task: Task = self._graph[head]
+        tail_task: Task = self._graph[tail]
         
-        self.graph[head_task].add(tail_task)
+        self._graph[head_task].add(tail_task)
         tail_task.inputs = {var: None for var in variables}
         head_task.output_variables.extend(variables)
-        
 
-    def draw(self):
+    def draw(self, flow_name: str):
         graph = Digraph(format='pdf')
-        for head in self.graph:
-            for tail in self.graph[head]:
-                graph.edge(head.task_name, tail.task_name)
+        for head in self._graph:
+            for tail in self._graph[head]:
+                edge_name = set(head.output_variables) & set(tail.inputs)
+                graph.edge(head.task_name, tail.task_name, label=str(edge_name))
             
-            if not self.graph[head]:
+            if not self._graph[head]:
                 graph.node(head.task_name)
         
-        graph.render(self.flow_name, cleanup=True)
+        graph.render(flow_name, cleanup=True)
+   
 
-    def set_flow_input(self) -> Task:
-        flow_task: Task = self.graph[self.flow_name]
-        for task in self.graph[flow_task]:
-            for variable, _ in task.inputs.items():
-                if variable in self.flow_input:
-                    task.inputs[variable] = self.flow_input[variable]
-
-        return flow_task
+class BuildGraph:
+    """ Orchistrates building the DAG (directed acyclic graph) i.e. the graph"""
+    def __init__(self, dag_builder: Type[BuildDAG], dag_validator: Type[ValidateDAG]):
+        self._flow_source_code = inspect.getsource(ctx.flow_fn)
+        self._tree = ast.parse(self._flow_source_code)
+        self._dag_builder = dag_builder
+        self._dag_validator = dag_validator
         
-    def get_entry_tasks(self) -> set[Task]:
-        return set(task for task in self.graph if not task.inputs and task.task_name != self.flow_name)
-    
-
-    def pass_outputs_to_next_task(self, task: Task):
-        for next_task in self.graph[task]:
-            next_task.inputs = {**next_task.inputs, **task.outputs}
-                
-    def is_task_ready(self, task: Task) -> bool:
-        # TODO: Technically user could return None or 0 in a variable and this would not work ...
-        #       I think the plan is to return an object that contains STATE and data.
-        # This still returns True for no inputs
-        return all(input for input in task.inputs.values())
-    
-    def submit_next_task(self, tasks: set[Task], pool: ProcessPool):
-        processes = iter(pool)    
-        for next_task in tasks:
-            if not self.is_task_ready(next_task):
-                continue
-                
-            process = next(processes, None)
-            # There is no ready process available
-            if not process:
-                self.waiting_tasks.append(next_task)
-            # Queue the next task to start
-            else:
-                queue = pool.process_queues[process.name]
-                queue.put(TaskStartMessage(next_task))
-
-    
-    def submit_waiting_tasks(self, pool: ProcessPool):
-        for _ in range(len(self.waiting_tasks)):
-            # TODO: This needs to be tested
-            task = set(self.waiting_tasks.popleft())
-            self.submit_next_task(task, pool)
-            
-
-    def flow_run_complete(self) -> bool:
-        return all(task.state for task in self.graph if task.task_name != self.flow_name)
-            
+    @classmethod
+    def from_code(cls):
+        tasks = list(ctx.tasks.values())
+        graph = Graph(tasks)
+        graph_build = cls(BuildDAG, ValidateDAG)
+        graph_build._validate_flow()
+        dag = graph_build._build_dag()
+        dag.construct_edges()
+        graph_build._add_edges(graph, dag)
+        return graph
         
-    @staticmethod
-    def wait_for_task(process_queue: Queue[TaskStartMessage], end_queue: Queue[TaskEndMessage]):
-        process_name = mp.current_process().name
         
-        while message := process_queue.get():
-
-            if isinstance(message, ProcessEndMessage):
-                break
+    def _validate_flow(self):
+        ...
         
-            task = message.task
-            inputs, output_variables, fn = task.inputs, task.output_variables, task.fn
-            # TODO: Note inputs assumes only *args and not **kwargs currently
-            output = fn(**inputs)
-
-            # TODO: Create a setter for task.outputs instead of having this here
-            if isinstance(output, tuple):
-                task.outputs = dict(zip(output_variables, output))
-            elif output:
-                [output_variables] = output_variables
-                task.outputs = {output_variables: output}
-            
-            # TODO: The task passed in and out of the queue does not have the same mememory address ...
-            # so we cannot use this task in any way on the main thread.
-            # To avoid confusion it might be a better idea to only pass the data that needs to be updated ...
-            # in that task instead of the task object itself.
-            end_queue.put(TaskEndMessage(process_name, task))
-
-    
-    def run(self):
-
-        with ProcessPool(self.pool_size) as pool:
-            # Set task input for tasks that are tail nodes to the flow input
-            flow_task = self.set_flow_input()
-            
-            # Get entrypoint tasks that have in-deg = 0
-            entry_tasks = self.get_entry_tasks()
-            
-            # Start the entry point tasks
-            self.submit_next_task(entry_tasks, pool)
-            self.submit_next_task(self.graph[flow_task], pool)
-       
-            while message := pool.end_queue.get():
-                # Set the process as free/not busy
-                pool.free_process(message.process_name)
-                # There is at least one free process available, so submit any waiting tasks
-                self.submit_waiting_tasks(pool)
-
-                task = message.task
-                self.graph[task.task_name].state = True # Temporary
-                self.pass_outputs_to_next_task(task)
-                self.submit_next_task(self.graph[task], pool)
-                
-                if self.flow_run_complete():
-                    break
-    
         
-if __name__ == "__main__":
-      import engine      
-
-
+    def _build_dag(self) -> BuildDAG:
+        dag = self._dag_builder()
+        dag.visit(self._tree)
+        return dag
+        
+        
+    def _add_edges(self, graph: Graph, dag: BuildDAG):
+        for edge, variables in dag.edges.items():
+            graph.add_edge(variables, edge)
