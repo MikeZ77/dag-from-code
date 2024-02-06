@@ -1,9 +1,9 @@
-# TODO: This file should "orchistrate" the entire flow run in steps. See the pipeline dp: ...
-# https://learn.microsoft.com/en-us/previous-versions/msp-n-p/ff963548(v=pandp.10)?redirectedfrom=MSDN
+# TODO: Automate the number of processes created by checking for bottlenecks (max number of siblings) using BFS
+# TODO: it should not be possible to create a cycle ...
+#       if the same task is called multiple times give it a sequence number e.g. my_task-0 ... my_task-n
 
 import ast
 import inspect
-# import workflow
 
 from graphviz import Digraph
 from typing import Any, Type
@@ -11,15 +11,10 @@ from collections import defaultdict, abc
 from dataclasses import dataclass
 from context import execution_context as ctx
 from task import Task
-# from flow import Flow, Edge
     
-# TODO: Instead of this, the task functions should be "registered" in some kind of context  
-# Likewise, engine.py would be called from the flow function registered @flow instead of "import workflow"   
 # tasks = inspect.getmembers(workflow, predicate=inspect.isfunction)
 # source_code = inspect.getsource(workflow.workflow)
 # tree = ast.parse(source_code)
-# # TODO: The graph would be instantiated from the Flow (is part of the flow), so the flow would be responsible ...
-# # For passing the flow input to it. For now just hardcode an input to pass in.
 # graph = Flow(task_fns=tasks, flow_name="workflow", cpu_cores=4, flow_input={"input": 2})
 # print(ast.dump(tree, indent=4))
 
@@ -100,31 +95,6 @@ class BuildDAG(ast.NodeVisitor):
                     self.edges[edge].append(edge_name)
 
 
-# visitor = BuildDAG()
-# visitor.visit(tree)
-# visitor.construct_edges()
-
-# for edge, variables in visitor.edges.items():
-#     graph.add_edge(variables, edge)
-
-# graph.draw()
-# graph.run()
-
-
-# TODO: This should probably be a collections.abc instead of a dict override.
-#       That way we can provide iterators for traversing the graph in different ways ...
-#       and create methods like get_task(), get_children(), etc. 
-# class TaskDict(UserDict):
-#     def __init__(self, data: dict[Task, set], **kwargs):
-#         # maps task_name to Task which is the key for data
-#         self.task_map = {task.task_name: task for task in data.keys()}
-#         super().__init__(data, **kwargs)
-    
-#     def __getitem__(self, key):
-#         if isinstance(key, str):
-#             return self.task_map[key]
-#         return self.data[key]
-
 
 class ValidateDAG(ast.NodeVisitor):
     ...
@@ -139,23 +109,26 @@ class Edge:
 class TaskGraph(abc.Mapping):
     def __init__(self, graph: dict[Task, set[Task]]):
         self.graph = graph
+        self.map = { task.task_name: task for task in graph}
         
-    def __getitem__(self, key):
-        ...
+    def __getitem__(self, key: str | Task) -> set[Task]:
+        if isinstance(key, str):
+            return self.map[key]
+        else:
+            return self.graph[key]
         
     def __iter__(self):
-        ...
+        return iter(self.graph)
         
     def __len__(self):
-        ...
+        return len(self.graph)
         
 
 class Graph:
-
     def __init__(self, tasks: list[Task]):
-        self._graph: TaskGraph = TaskGraph({task: set() for task in tasks})
+        self._graph = TaskGraph({task: set() for task in tasks})
 
-   
+        
     def add_edge(self, variables: list[str], edge: Edge):
         head, tail = edge.head, edge.tail
         head_task: Task = self._graph[head]
@@ -164,6 +137,12 @@ class Graph:
         self._graph[head_task].add(tail_task)
         tail_task.inputs = {var: None for var in variables}
         head_task.output_variables.extend(variables)
+
+    def nodes(self) -> set[Task]:
+        return set(self._graph.keys())
+
+    def children(self, task: Task) -> set[Task]:
+        return self._graph[task]
 
     def draw(self, flow_name: str):
         graph = Digraph(format='pdf')
@@ -177,7 +156,7 @@ class Graph:
         
         graph.render(flow_name, cleanup=True)
    
-
+    
 class BuildGraph:
     """ Orchistrates building the DAG (directed acyclic graph) i.e. the graph"""
     def __init__(self, dag_builder: Type[BuildDAG], dag_validator: Type[ValidateDAG]):

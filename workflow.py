@@ -30,8 +30,8 @@ def task_4(b, c):
 def task_5():
     print("I do nothing")
 
-@flow()
-def workflow(input: int):
+@flow(draw=False, cpu_cores=4)
+def workflow(input: int = 2):
     a = task_1(input)
     b, c = task_2(a)
     task_3(input)

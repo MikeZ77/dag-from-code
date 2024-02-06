@@ -1,154 +1,19 @@
 from __future__ import annotations
 
-# TODO: Automate the number of processes created by checking for bottlenecks (max number of siblings) using BFS
-# TODO: Allow the engine to use either processes or threads based on user preference
-# TODO: The "Graph" is really the "Flow". However, this may be too much functionality. It may make sense to ...
-#       create the graph seperately and inject it into the Flow from engine.py ...
-#       maybe TaskDict should actually be the graph and perform the graph like functions
-
-# import functools
-import multiprocessing as mp
-
-from typing import  Any
-from graphviz import Digraph
 from collections import deque
-from collections.abc import Iterable, Iterator
-from multiprocessing import Process, Queue
-from dataclasses import dataclass
 
-from task import Task, TaskState
-from graph import TaskDict
-
-@dataclass(eq=True, frozen=True)
-class Edge:
-    head: str
-    tail: str   
-
-@dataclass
-class TaskData:
-    state: TaskState
-    result: Any
-    message: str
-
-@dataclass
-class TaskEndMessage:
-    process_name: str
-    task: Task
-
-@dataclass
-class TaskStartMessage:
-    task: Task
-    
-@dataclass
-class ProcessEndMessage:
-    ...
-
-# TODO: Also make this a context manager
-# Have it create the processes and Queue
-class ProcessPool(Iterable):
-    def __init__(self, pool_size: int):
-        self.pool_size = pool_size
-        self.processes: list[Process] = []
-        self.busy: list[bool] = []
-        self.end_queue: Queue[TaskEndMessage] = None
-        self.process_queues: dict[str, Queue[TaskStartMessage]] = {}
-    
-    def create_process_pool(self):
-        self.end_queue = Queue()
-        
-        for _ in range(self.pool_size):
-            process_queue = Queue()
-            process = Process(target=Flow.wait_for_task, args=(process_queue, self.end_queue))
-            self.process_queues[process.name] = process_queue
-            self.processes.append(process)
-
-        self.busy = [False] * len(self.processes)
-
-    def free_process(self, process_name: str):
-        idx = next( idx for idx, process in enumerate(self.processes) if process.name == process_name)
-        self.busy[idx] = False
-        
-    def __iter__(self):
-        return ProcessPoolIterator(self.processes, self.busy)
-    
-    def __enter__(self):
-        self.create_process_pool()
-        
-        for process in self.processes:
-            process.start()
-            
-        return self
-        
-    def __exit__(self, exc_type, exc_value, traceback):
-        print(exc_value)
-        
-        for queue in self.process_queues.values():
-            queue.put(ProcessEndMessage())
-        
-        for process in self.processes:
-            process.join()
-        
-        for queue in self.process_queues.values():
-            queue.close()
-            queue.join_thread() # Find out why/if join thread is needed
-
-        self.end_queue.close()
-        self.end_queue.join_thread()
-
-
-class ProcessPoolIterator(Iterator):
-    def __init__(self, processes, busy):
-        self.processes = processes
-        self.busy = busy
-        self.item = 0
-        
-    def __iter__(self):
-        return self
-    
-    def __next__(self) -> Process | None:
-        while self.busy[self.item]:
-            self.item += 1
-        
-        if self.item >= len(self.processes):
-            raise StopIteration
-        
-        self.busy[self.item] = True
-        return self.processes[self.item]
+from task import Task, TaskStartMessage
+from graph import Graph
+from pool import ProcessPool
     
 
-       
 class Flow:
-    def __init__(self, task_fns, flow_name: str, cpu_cores = None, flow_input = dict()):
-        # TODO: it should not be possible to create a cycle ...
-        #       if the same task is called multiple times give it a sequence number e.g. my_task-0 ... my_task-n
-        self.task_fns = dict(task_fns)
+    def __init__(self, flow_name: str, graph: Graph, process_pool: ProcessPool, flow_input = dict()):
         self.flow_name = flow_name
         self.flow_input = flow_input
-        self.graph: dict[Task, set[Task]] = TaskDict({Task(name, fn): set() for name, fn in task_fns})
+        self.graph = graph._graph
+        self.process_pool = process_pool
         self.waiting_tasks: deque[Task] = deque([])
-        self.pool_size = mp.cpu_count() if not cpu_cores else cpu_cores
-        
-    def add_edge(self, variables: list[str], edge: Edge):
-        head, tail = edge.head, edge.tail
-        head_task: Task = self.graph[head]
-        tail_task: Task = self.graph[tail]
-        
-        self.graph[head_task].add(tail_task)
-        tail_task.inputs = {var: None for var in variables}
-        head_task.output_variables.extend(variables)
-        
-
-    def draw(self):
-        graph = Digraph(format='pdf')
-        for head in self.graph:
-            for tail in self.graph[head]:
-                edge_name = set(head.output_variables) & set(tail.inputs)
-                graph.edge(head.task_name, tail.task_name, label=str(edge_name))
-            
-            if not self.graph[head]:
-                graph.node(head.task_name)
-        
-        graph.render(self.flow_name, cleanup=True)
 
     def set_flow_input(self) -> Task:
         flow_task: Task = self.graph[self.flow_name]
@@ -199,40 +64,9 @@ class Flow:
     def flow_run_complete(self) -> bool:
         return all(task.state for task in self.graph if task.task_name != self.flow_name)
             
-    # TODO: This might need to be a seperate class e.g. TaskRunner
-    # NOTE: One major difference is that with Processes vs threads we will need to reload the modules ...
-    #       In that process.    
-    @staticmethod
-    def wait_for_task(process_queue: Queue[TaskStartMessage], end_queue: Queue[TaskEndMessage]):
-        process_name = mp.current_process().name
-        
-        while message := process_queue.get():
-
-            if isinstance(message, ProcessEndMessage):
-                break
-        
-            task = message.task
-            inputs, output_variables, fn = task.inputs, task.output_variables, task.fn
-            # TODO: Note inputs assumes only *args and not **kwargs currently
-            output = fn(**inputs)
-
-            # TODO: Create a setter for task.outputs instead of having this here
-            if isinstance(output, tuple):
-                task.outputs = dict(zip(output_variables, output))
-            elif output:
-                [output_variables] = output_variables
-                task.outputs = {output_variables: output}
-            
-            # TODO: The task passed in and out of the queue does not have the same mememory address ...
-            # so we cannot use this task in any way on the main thread.
-            # To avoid confusion it might be a better idea to only pass the data that needs to be updated ...
-            # in that task instead of the task object itself.
-            end_queue.put(TaskEndMessage(process_name, task))
-
-    
     def run(self):
 
-        with ProcessPool(self.pool_size) as pool:
+        with self.process_pool as pool:
             # Set task input for tasks that are tail nodes to the flow input
             flow_task = self.set_flow_input()
             

@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 from enum import Enum, auto
-from typing import Callable
+from typing import Callable, Any
+from dataclasses import dataclass
 
 # TODO: There needs to be Task and Flow STATES
 # The state objects get returned through the message
@@ -11,6 +14,26 @@ class TaskState(Enum):
     SUCCESS = auto()
     FAILED = auto()
     RETRYING = auto()
+
+
+@dataclass
+class TaskEndMessage:
+    process_name: str
+    task: Task
+
+@dataclass
+class TaskStartMessage:
+    task: Task
+    
+@dataclass
+class ProcessEndMessage:
+    ...
+
+@dataclass
+class TaskData:
+    state: TaskState
+    result: Any
+    message: str
 
 class Task:
     # TODO: # A task should take a wait_for arg s.t. it waits for those listed tasks to finish
