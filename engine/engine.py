@@ -21,13 +21,14 @@ def task(__fn):
     return __fn
 
 
-# Flow arguments can be setup here
-def flow(*, name: str = None, cpu_cores: int = None, draw: bool = False): 
-    def wrapper(__fn=None):
+
+def flow(__fn=None, *, name: str = None, cpu_cores: int = None, draw: bool = False): 
+    def flow_decorator(__fn):
         def execute(*args, **kwargs):
             nonlocal name
             nonlocal cpu_cores
             
+            # TODO: This does not find default values
             fn_params = inspect.signature(__fn).parameters
             arg_input = {param: arg for param, arg in zip(fn_params, args)}
             flow_input = {**arg_input, **kwargs}
@@ -45,9 +46,12 @@ def flow(*, name: str = None, cpu_cores: int = None, draw: bool = False):
             # NOTE: This would not need to be done with threading since threads share the same memory space.
 
             graph = BuildGraph.from_code()
-            
+            print(graph)
             if draw:
                 graph.draw(name)
+            
+            # for task in graph._graph:
+            #     print(task)
             
             runner = TaskRunner()
             process_pool = ProcessPool(runner, pool_size=cpu_cores)
@@ -56,4 +60,10 @@ def flow(*, name: str = None, cpu_cores: int = None, draw: bool = False):
             flow.run()
             
         return execute 
-    return wrapper
+    
+    if __fn:
+        return flow_decorator(__fn)
+    else:
+        return flow_decorator
+        
+    

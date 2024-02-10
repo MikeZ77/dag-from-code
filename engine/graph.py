@@ -20,7 +20,8 @@ class BuildDAG(ast.NodeVisitor):
         self.head_nodes = defaultdict(list)                             # "task_2": ["a"]
         self.tail_nodes = defaultdict(list)                             # "a": ["task_3"]
         self.edges: dict[Edge, list[str]] = defaultdict(list)           # Edge(head='task_1', tail='task_2'): ['a']
-        self.kwargs = defaultdict(dict)                                 # {"task_name": {kwarg_value: kwarg_name}}   
+        self.kwargs = defaultdict(dict)                                 # {"task_name": {kwarg_value: kwarg_name}} 
+        self.output_variables = defaultdict(list)                       # {"task_name": [output_variable_name]} 
         # TODO: Keep track of variables and handle duplcaite variables i.e. variables that a re-assigned in the flow
         
     def visit_FunctionDef(self, node):
@@ -50,10 +51,12 @@ class BuildDAG(ast.NodeVisitor):
             names: list[ast.Name] = assignee.elts
             variables = [name.id for name in names]
             self.head_nodes[fn_name].extend(variables)
+            self.output_variables[fn_name].extend(variables)
 
         # The head node has out-deg == 1
         if isinstance(assignee, ast.Name):
             self.head_nodes[fn_name].append(assignee.id)
+            self.output_variables[fn_name].append(assignee.id)
         
         # Check if this head node is also a tail node (has params)
         if fn_args:
@@ -84,8 +87,8 @@ class BuildDAG(ast.NodeVisitor):
             for kwarg in fn_kwargs:
                 self.tail_nodes[kwarg.value.id].append(fn_name)
 
-            # keep track of the kwarg name for task input
-            self.kwargs[func.id][kwarg.value.id] = kwarg.arg
+                # keep track of the kwarg name for task input
+                self.kwargs[func.id][kwarg.value.id] = kwarg.arg
             
         self.generic_visit(node)
     
@@ -132,18 +135,31 @@ class Graph:
         self._graph = TaskGraph({task: set() for task in tasks})
 
         
-    def add_edge(self, variables: list[str], edge: Edge, fn_kwargs: dict):
+    def add_edge(self, variables: list[str], edge: Edge):
         head, tail = edge.head, edge.tail
         head_task: Task = self._graph[head]
         tail_task: Task = self._graph[tail]
         
-        tail_task.fn_kwargs = fn_kwargs
-        
         self._graph[head_task].add(tail_task)
         tail_task.inputs = {var: None for var in variables}
-        if not set(variables).issubset(set(head_task.output_variables)):
-            head_task.output_variables.extend(variables)
+        
 
+    def __repr__(self):
+        output = []
+        for node in self._graph:
+            line = []
+            line.append(f"| {node.task_name} |")
+            for child in self._graph[node]:
+                line.append(f"({',' .join(child.inputs)}) [{child.task_name}]")
+
+            output.append(line)
+                
+        for idx, line in enumerate(output):
+            output[idx] = " -> ".join(line) + " -> None"
+            
+        return "\n".join(line for line in output)    
+        
+    
     def nodes(self) -> set[Task]:
         return set(self._graph.keys())
 
@@ -170,8 +186,8 @@ class BuildGraph:
         self._tree = ast.parse(self._flow_source_code)
         self._dag_builder = dag_builder
         self._dag_validator = dag_validator
-        print(ast.dump(self._tree, indent=4))
-        print()
+        # print(ast.dump(self._tree, indent=4))
+        # print()
         
     @classmethod
     def from_code(cls):
@@ -181,6 +197,7 @@ class BuildGraph:
         graph_build._validate_flow()
         dag = graph_build._build_dag()
         dag.construct_edges()
+        graph_build._update_task_fn_information(tasks, dag)
         graph_build._add_edges(graph, dag)
         return graph
         
@@ -194,8 +211,17 @@ class BuildGraph:
         dag.visit(self._tree)
         return dag
         
-        
+
+    def _update_task_fn_information(self, tasks: list[Task], dag: BuildDAG):
+        for task in tasks:
+            if task.task_name in dag.kwargs:
+                task.fn_kwargs = dag.kwargs[task.task_name]
+            
+            if task.task_name in dag.output_variables:
+                task.output_variables = dag.output_variables[task.task_name]
+
+            
+            
     def _add_edges(self, graph: Graph, dag: BuildDAG):
         for edge, variables in dag.edges.items():
-            fn_kwargs = dag.kwargs[edge.tail]
-            graph.add_edge(variables, edge, fn_kwargs)
+            graph.add_edge(variables, edge)

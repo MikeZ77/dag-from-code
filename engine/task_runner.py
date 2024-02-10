@@ -26,18 +26,10 @@ class TaskRunner:
                 break
         
             task = message.task
-            output_variables = task.output_variables
-            print(task)
+            # print(task)
 
-            output = task.run()
+            task.run()
 
-            # TODO: Create a setter for task.outputs instead of having this here
-            if isinstance(output, tuple):
-                task.outputs = dict(zip(output_variables, output))
-            elif output:
-                [output_variables] = output_variables
-                task.outputs = {output_variables: output}
-            
             # TODO: The task passed in and out of the queue does not have the same mememory address ...
             # so we cannot use this task in any way on the main thread.
             # To avoid confusion it might be a better idea to only pass the data that needs to be updated ...

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+
+from inspect import signature, Parameter
 from enum import Enum, auto
 from typing import Callable, Any
 from dataclasses import dataclass
@@ -43,10 +46,10 @@ class Task:
     def __init__(self, name: str, fn: Callable):
         self.task_name = name
         self.fn = fn 
+        self.fn_kwargs = {}
         # For now, we just have state complete and not complete ...
         # until and actual state system is implemented
         self.state = False
-        self.fn_kwargs = {}
         # All task inputs get translated to kwargs
         self.inputs = {}
         self.outputs = {}
@@ -66,19 +69,40 @@ class Task:
         return f"""     Task(
             {self.task_name=}
             {self.inputs=}
-            {self._translate_input_kwargs()=}
-            {self.outputs=}
+            {self._translate_input_args({})=}
+            {self._translate_input_kwargs({})=}
+            {self.output_variables=}
         )
         """
     
-    def _translate_input_kwargs(self):
-        inputs = {}
+    def _translate_input_args(self, inputs: dict):
+        # Get the args and potential args from the function signature -> these are the input keys
+        # modify the input key up until we get to the first kwarg
+        # proc = os.getpid()
+        # t_name = self.task_name
+        parameters = signature(self.fn).parameters.values()
+        params = (param.name for param in parameters if param.kind in ( Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD))
+        for pos_arg in (set(self.inputs) - set(self.fn_kwargs)):
+            if next_param := next(params, None):
+                inputs[next_param] = self.inputs[pos_arg]
+            
+        return inputs
+        
+    
+    def _translate_input_kwargs(self, inputs: dict):
         for key, value in self.inputs.items():
             if key in self.fn_kwargs:
                 inputs[self.fn_kwargs[key]] = value
-            else:
-                inputs[key] = value
+
         return inputs
+    
+    def _update_outputs(self, output):
+        if isinstance(output, tuple):
+            self.outputs = dict(zip(self.output_variables, output))
+        elif output:
+            [output_variables] = self.output_variables
+            self.outputs = {output_variables: output}
+
     
     def map():
         ...
@@ -89,5 +113,9 @@ class Task:
         ...
     
     def run(self):
-        return self.fn(**self._translate_input_kwargs())
+        inputs = {}
+        inputs = self._translate_input_args(inputs)
+        inputs = self._translate_input_kwargs(inputs)
+        output = self.fn(**inputs)
+        self._update_outputs(output)
         

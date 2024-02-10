@@ -30,7 +30,7 @@ class Flow:
 
     def pass_outputs_to_next_task(self, task: Task):
         for next_task in self.graph[task]:
-            next_task.inputs = {**next_task.inputs, **task.outputs}
+            next_task.inputs.update((var, value) for var, value in task.outputs.items() if var in next_task.inputs)
                 
     def is_task_ready(self, task: Task) -> bool:
         # TODO: Technically user could return None or 0 in a variable and this would not work ...

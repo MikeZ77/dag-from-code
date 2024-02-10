@@ -16,6 +16,7 @@ def task_3(input):
 
 @task
 def task_4(b, c):
+    assert b == 1 and c == 2
     print("Task_4", b, c)
 
 @task

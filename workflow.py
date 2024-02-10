@@ -56,10 +56,17 @@ def optional_kwarg(first):
     print("optional_kwarg")
     print(first)
 
-# @task
-# def output_does_is_not_input_name(first):
-#     print("output_does_is_not_input_name")
-#     print(first)
+
+@task
+def output_is_not_input_name(first):
+    print("output_is_not_input_name")
+    print(first)
+
+
+@task
+def arbitrary_args_and_kwargs(one, two_arg, three_kw, four_kw):
+    print("arbitrary_args_and_kwargs")
+    print(one, two_arg, three_kw, four_kw)
 
 
 # @task
@@ -85,12 +92,13 @@ def workflow():
     one, two, three, four = create_outputs()
     output_name_is_input_name(one)
     optional_kwarg(first=one)
-    # output_does_is_not_input_name(one)
+    output_is_not_input_name(one)
+    arbitrary_args_and_kwargs(one, two, three_kw=three, four_kw=four)
     # args_task(one, two, three)
     # kwargs_task(one, two, three)
     # args_and_kwargs_task(one, two, three=three, four=four)
     
-    
+  
 if __name__ == "__main__":
     workflow()
 
