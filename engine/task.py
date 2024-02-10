@@ -35,6 +35,9 @@ class TaskData:
     result: Any
     message: str
 
+# TODO: A task can be provided a "state_handler" by the client which gets run after the task function has run ...
+#       this callback Takes the current state and can return a new state.
+#       multiple state handlers can also be chained together.
 class Task:
     # TODO: # A task should take a wait_for arg s.t. it waits for those listed tasks to finish
     def __init__(self, name: str, fn: Callable):
@@ -43,13 +46,14 @@ class Task:
         # For now, we just have state complete and not complete ...
         # until and actual state system is implemented
         self.state = False
-        # TODO: we need to differentiate between *args and **kwargs
-        # {"variable_name_1": payload, "variable_name_2": payload ...} 
+        self.fn_kwargs = {}
+        # All task inputs get translated to kwargs
         self.inputs = {}
         self.outputs = {}
         # We need to return a payload with the name of the variables. So the output of fn can be mapped to self.outputs.
         self.output_variables = [] # [variable_name_1, variable_name_2]
-        
+    
+     
     def __eq__(self, other):
         if isinstance(other, self.__class__):
             return self.task_name == other.task_name
@@ -57,6 +61,24 @@ class Task:
 
     def __hash__(self):
         return hash(self.task_name)
+    
+    def __repr__(self):
+        return f"""     Task(
+            {self.task_name=}
+            {self.inputs=}
+            {self._translate_input_kwargs()=}
+            {self.outputs=}
+        )
+        """
+    
+    def _translate_input_kwargs(self):
+        inputs = {}
+        for key, value in self.inputs.items():
+            if key in self.fn_kwargs:
+                inputs[self.fn_kwargs[key]] = value
+            else:
+                inputs[key] = value
+        return inputs
     
     def map():
         ...
@@ -67,4 +89,5 @@ class Task:
         ...
     
     def run(self):
-        ...
+        return self.fn(**self._translate_input_kwargs())
+        

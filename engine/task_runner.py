@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import os
 import multiprocessing as mp
 
 from multiprocessing import Queue
 
-from task import TaskEndMessage, TaskStartMessage, ProcessEndMessage
+from engine.task import TaskEndMessage, TaskStartMessage, ProcessEndMessage
 
+# TODO: Before a task runs, it should evaluate a "trigger" which evaluates the upstream state and decides if ...
+#       the task should run (i.e. True or False). E.g. all_successful, any_failed, all_finished, etc.
+# TODO: The TaskRunner should be responsible for performing task retries based on the state returned.
 class TaskRunner:
     def __init__(self):
-        ...
-        
+        ...       
+         
     # NOTE: One major difference is that with Processes vs threads we will need to reload the modules ...
     #       In that process.     
     @staticmethod
@@ -22,9 +26,10 @@ class TaskRunner:
                 break
         
             task = message.task
-            inputs, output_variables, fn = task.inputs, task.output_variables, task.fn
-            # TODO: Note inputs assumes only *args and not **kwargs currently
-            output = fn(**inputs)
+            output_variables = task.output_variables
+            print(task)
+
+            output = task.run()
 
             # TODO: Create a setter for task.outputs instead of having this here
             if isinstance(output, tuple):

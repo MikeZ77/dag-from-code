@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from collections import deque
 
-from task import Task, TaskStartMessage
-from graph import Graph
-from pool import ProcessPool
+from engine.task import Task, TaskStartMessage
+from engine.graph import Graph
+from engine.pool import ProcessPool
     
-
+# TODO: Just like a Task has a state_handler, the flow can have a terminal_state_handler.
 class Flow:
     def __init__(self, flow_name: str, graph: Graph, process_pool: ProcessPool, flow_input = dict()):
         self.flow_name = flow_name

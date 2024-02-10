@@ -9,22 +9,20 @@ from graphviz import Digraph
 from typing import Any, Type
 from collections import defaultdict, abc
 from dataclasses import dataclass
-from context import execution_context as ctx
-from task import Task
+
+from engine.context import execution_context as ctx
+from engine.task import Task
     
-# tasks = inspect.getmembers(workflow, predicate=inspect.isfunction)
-# source_code = inspect.getsource(workflow.workflow)
-# tree = ast.parse(source_code)
-# graph = Flow(task_fns=tasks, flow_name="workflow", cpu_cores=4, flow_input={"input": 2})
-# print(ast.dump(tree, indent=4))
 
 class BuildDAG(ast.NodeVisitor):
     def __init__(self):
-        self.head_nodes = defaultdict(list)       # "task_2": ["a"]
-        self.tail_nodes = defaultdict(list)       # "a": ["task_3"]
-        self.edges = defaultdict(list)            # Edge(head='task_1', tail='task_2'): ['a']
-        self.isolated_nodes = set()               # "task_4"
-    
+        
+        self.head_nodes = defaultdict(list)                             # "task_2": ["a"]
+        self.tail_nodes = defaultdict(list)                             # "a": ["task_3"]
+        self.edges: dict[Edge, list[str]] = defaultdict(list)           # Edge(head='task_1', tail='task_2'): ['a']
+        self.kwargs = defaultdict(dict)                                 # {"task_name": {kwarg_value: kwarg_name}}   
+        # TODO: Keep track of variables and handle duplcaite variables i.e. variables that a re-assigned in the flow
+        
     def visit_FunctionDef(self, node):
         # TODO: Validate that this is a flow function
         args: ast.arguments = node.args
@@ -40,7 +38,6 @@ class BuildDAG(ast.NodeVisitor):
         assignee: ast.Name | ast.Tuple = node.targets[0]
 
         # This cannot be a Task since the assingnor is not a function call
-        # TODO: Validate that this function is a task
         if not isinstance(assignor, ast.Call):
             return
         
@@ -66,23 +63,29 @@ class BuildDAG(ast.NodeVisitor):
         self.generic_visit(node)
         
     def visit_Expr(self, node):
-       
+        
+        # The expression cannot be a task
         if not isinstance(node.value, ast.Call):
             return
         
         func: ast.Name = node.value.func
         fn_args: list[ast.Name] = node.value.args
+        fn_kwargs: list[ast.keyword] = node.value.keywords
         fn_name = func.id
         
-        # The node is a tail node
+        # we get the tail node arg so it can be mapped back to the value of the head node output
         if fn_args:
-            for param in fn_args:
-                self.tail_nodes[param.id].append(fn_name)
-            
-        # TODO: I dont think we need this since the graph has access to the tasks ...
-        # and can determine if a node is isolated.
-        else:
-            self.isolated_nodes.add(fn_name)
+            for arg in fn_args:
+                self.tail_nodes[arg.id].append(fn_name)
+        
+        # tail node kwarg 
+        if fn_kwargs:
+            # get the kwarg value so it can be mapped back to the value of the head node output
+            for kwarg in fn_kwargs:
+                self.tail_nodes[kwarg.value.id].append(fn_name)
+
+            # keep track of the kwarg name for task input
+            self.kwargs[func.id][kwarg.value.id] = kwarg.arg
             
         self.generic_visit(node)
     
@@ -129,14 +132,17 @@ class Graph:
         self._graph = TaskGraph({task: set() for task in tasks})
 
         
-    def add_edge(self, variables: list[str], edge: Edge):
+    def add_edge(self, variables: list[str], edge: Edge, fn_kwargs: dict):
         head, tail = edge.head, edge.tail
         head_task: Task = self._graph[head]
         tail_task: Task = self._graph[tail]
         
+        tail_task.fn_kwargs = fn_kwargs
+        
         self._graph[head_task].add(tail_task)
         tail_task.inputs = {var: None for var in variables}
-        head_task.output_variables.extend(variables)
+        if not set(variables).issubset(set(head_task.output_variables)):
+            head_task.output_variables.extend(variables)
 
     def nodes(self) -> set[Task]:
         return set(self._graph.keys())
@@ -164,6 +170,8 @@ class BuildGraph:
         self._tree = ast.parse(self._flow_source_code)
         self._dag_builder = dag_builder
         self._dag_validator = dag_validator
+        print(ast.dump(self._tree, indent=4))
+        print()
         
     @classmethod
     def from_code(cls):
@@ -189,4 +197,5 @@ class BuildGraph:
         
     def _add_edges(self, graph: Graph, dag: BuildDAG):
         for edge, variables in dag.edges.items():
-            graph.add_edge(variables, edge)
+            fn_kwargs = dag.kwargs[edge.tail]
+            graph.add_edge(variables, edge, fn_kwargs)

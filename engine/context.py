@@ -1,6 +1,19 @@
 from typing import Callable
 
-from task import Task
+from engine.task import Task
+
+# TODO: Execution context should be shared between processes so that a user can ...
+#       set() and get() between tasks.
+
+# from multiprocessing import Manager
+# manager = Manager()
+# Manager.register('ExecutionContext', ExecutionContext)
+# execution_context = manager.ExecutionContext()
+# Process(target=worker1, args=(execution_context,)) 
+
+# Another interesting idea could be a method, wait_for_item('a') that blocks until 'a' is ...
+# added to the store (since the order of execution is not guaranteed).
+# Alternatively you could add e.g.wait_for=[task_2] in the task definition.
 
 class ExecutionContext:
     def __init__(self):
@@ -10,7 +23,7 @@ class ExecutionContext:
         self.store = None
         # TODO: Load env variables
         # TODO: Create flow run with a unique id
-        # TODO: Create a slogger
+        # TODO: Create a logger
     
     def register_flow(self, fn: Callable):
         self.flow_fn = fn
