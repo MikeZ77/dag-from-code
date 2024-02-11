@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import os
-
 from inspect import signature, Parameter
 from enum import Enum, auto
 from typing import Callable, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
 
 # TODO: There needs to be Task and Flow STATES
 # The state objects get returned through the message
@@ -18,6 +17,10 @@ class TaskState(Enum):
     FAILED = auto()
     RETRYING = auto()
 
+@dataclass
+class TaskInput:
+    args: list = field(default_factory=list)
+    kwargs: dict = field(default_factory=dict) 
 
 @dataclass
 class TaskEndMessage:
@@ -69,30 +72,31 @@ class Task:
         return f"""     Task(
             {self.task_name=}
             {self.inputs=}
-            {self._translate_input_args({})=}
-            {self._translate_input_kwargs({})=}
+            {self.fn_kwargs=}
             {self.output_variables=}
         )
         """
     
-    def _translate_input_args(self, inputs: dict):
-        # Get the args and potential args from the function signature -> these are the input keys
-        # modify the input key up until we get to the first kwarg
-        # proc = os.getpid()
-        # t_name = self.task_name
+    def _translate_args(self, inputs: TaskInput):
         parameters = signature(self.fn).parameters.values()
-        params = (param.name for param in parameters if param.kind in ( Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD))
-        for pos_arg in (set(self.inputs) - set(self.fn_kwargs)):
-            if next_param := next(params, None):
-                inputs[next_param] = self.inputs[pos_arg]
-            
+        params = (param for param in parameters if param.kind in (Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD))
+        
+        for pos_arg in self.inputs:
+            if (next_param := next(params, None)) and pos_arg not in self.fn_kwargs:
+                
+                if next_param.kind == Parameter.POSITIONAL_ONLY:
+                    inputs.args.append(self.inputs[pos_arg])
+                    
+                if next_param.kind == Parameter.POSITIONAL_OR_KEYWORD:
+                    inputs.kwargs[next_param.name] = self.inputs[pos_arg]
+
         return inputs
         
     
-    def _translate_input_kwargs(self, inputs: dict):
+    def _translate_kwargs(self, inputs: TaskInput):
         for key, value in self.inputs.items():
             if key in self.fn_kwargs:
-                inputs[self.fn_kwargs[key]] = value
+                inputs.kwargs[self.fn_kwargs[key]] = value
 
         return inputs
     
@@ -113,9 +117,9 @@ class Task:
         ...
     
     def run(self):
-        inputs = {}
-        inputs = self._translate_input_args(inputs)
-        inputs = self._translate_input_kwargs(inputs)
-        output = self.fn(**inputs)
+        inputs = TaskInput()
+        inputs = self._translate_args(inputs)
+        inputs = self._translate_kwargs(inputs)
+        output = self.fn(*inputs.args, **inputs.kwargs)
         self._update_outputs(output)
         

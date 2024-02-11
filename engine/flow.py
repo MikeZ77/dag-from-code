@@ -30,6 +30,7 @@ class Flow:
 
     def pass_outputs_to_next_task(self, task: Task):
         for next_task in self.graph[task]:
+            # print("DEBUG: ", task.task_name, "- >", next_task.task_name)
             next_task.inputs.update((var, value) for var, value in task.outputs.items() if var in next_task.inputs)
                 
     def is_task_ready(self, task: Task) -> bool:
@@ -57,7 +58,7 @@ class Flow:
     def submit_waiting_tasks(self, pool: ProcessPool):
         for _ in range(len(self.waiting_tasks)):
             # TODO: This needs to be tested
-            task = set(self.waiting_tasks.popleft())
+            task = set([self.waiting_tasks.popleft()])
             self.submit_next_task(task, pool)
             
 

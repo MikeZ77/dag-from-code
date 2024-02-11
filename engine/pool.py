@@ -70,7 +70,7 @@ class ProcessPoolIterator(Iterator):
         return self
     
     def __next__(self) -> Process | None:
-        while self.busy[self.item]:
+        while self.item < len(self.busy) and self.busy[self.item]:
             self.item += 1
         
         if self.item >= len(self.processes):
