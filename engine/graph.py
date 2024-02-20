@@ -6,12 +6,13 @@ import ast
 import inspect
 
 from graphviz import Digraph
-from typing import Any, Type
+from typing import Type
 from collections import defaultdict, abc
 from dataclasses import dataclass
 
 from engine.context import execution_context as ctx
 from engine.task import Task
+from engine.exceptions import UnregisteredTaskCalled, MultipleCallsInsideIterable
     
 
 class BuildDAG(ast.NodeVisitor):
@@ -35,7 +36,7 @@ class BuildDAG(ast.NodeVisitor):
         
     def visit_Assign(self, node):
         # An Assign creates a head Node and can also be a tail Node
-        assignor: Any  = node.value
+        assignor = node.value
         assignee: ast.Name | ast.Tuple = node.targets[0]
 
         # This cannot be a Task since the assingnor is not a function call
@@ -103,8 +104,36 @@ class BuildDAG(ast.NodeVisitor):
 
 
 class ValidateDAG(ast.NodeVisitor):
-    ...
+    def __init__(self, task_names: list[str], flow_name: str, module_tree: ast.Module):
+        self.task_names = task_names
+        self.flow_name = flow_name
+        self.module_tree = module_tree
+        self.flow_lineno = self._get_flow_func_lineno()
 
+    def _get_flow_func_lineno(self):
+        for node in ast.walk(self.module_tree):
+            if isinstance(node, ast.FunctionDef) and node.name == self.flow_name:
+                # Includes a 2 line offset since the flow lineno overlaps
+                return node.lineno - 2
+    
+    def visit_Assign(self, node):
+        assignor = node.value
+        lineno = self.flow_lineno + node.lineno
+        
+        if isinstance(assignor, ast.Tuple) or isinstance(assignor, ast.List):
+            if any(isinstance(elt, ast.Call) for elt in assignor.elts):
+                raise MultipleCallsInsideIterable(message="Multiple calls inside iterable.", 
+                                    lineno=lineno, 
+                                    additional_info="A single task can only be called per line."
+                                )
+        
+        if isinstance(assignor, ast.Call) and assignor.func.id not in self.task_names:
+            lineno = lineno
+            raise UnregisteredTaskCalled(message=f"Unregsitered callable {assignor.func.id} called inside flow scope.", 
+                                   lineno=lineno, 
+                                   additional_info="Functions or classes called inside the flow scope must be registered @task or task(fn)"
+                                )
+                
 
 @dataclass(eq=True, frozen=True)
 class Edge:
@@ -141,7 +170,7 @@ class Graph:
         tail_task: Task = self._graph[tail]
         
         self._graph[head_task].add(tail_task)
-        tail_task.inputs = {var: None for var in variables}
+        tail_task.inputs.update((var, None) for var in variables)
         
 
     def __repr__(self):
@@ -182,8 +211,13 @@ class Graph:
 class BuildGraph:
     """ Orchistrates building the DAG (directed acyclic graph) i.e. the graph"""
     def __init__(self, dag_builder: Type[BuildDAG], dag_validator: Type[ValidateDAG]):
-        self._flow_source_code = inspect.getsource(ctx.flow_fn)
-        self._tree = ast.parse(self._flow_source_code)
+        flow_module = inspect.getmodule(ctx.flow_fn)
+        module_source_code = inspect.getsource(flow_module)
+        flow_source_code = inspect.getsource(ctx.flow_fn)
+        self.flow_name = ctx.flow_fn.__name__
+        self._tree = ast.parse(flow_source_code)
+        self._module_tree = ast.parse(module_source_code)
+        self.tasks = list(ctx.tasks.values())
         self._dag_builder = dag_builder
         self._dag_validator = dag_validator
         # print(ast.dump(self._tree, indent=4))
@@ -191,19 +225,23 @@ class BuildGraph:
         
     @classmethod
     def from_code(cls):
-        tasks = list(ctx.tasks.values())
-        graph = Graph(tasks)
         graph_build = cls(BuildDAG, ValidateDAG)
+        graph = graph_build._build_graph()
         graph_build._validate_flow()
         dag = graph_build._build_dag()
         dag.construct_edges()
-        graph_build._update_task_fn_information(tasks, dag)
+        graph_build._update_task_fn_information(dag)
         graph_build._add_edges(graph, dag)
         return graph
         
+    
+    def _build_graph(self) -> Graph:
+        return Graph(self.tasks)
         
     def _validate_flow(self):
-        ...
+        task_names = [task.task_name for task in self.tasks]
+        valid_dag = self._dag_validator(task_names, self.flow_name, self._module_tree)
+        valid_dag.visit(self._tree)
         
         
     def _build_dag(self) -> BuildDAG:
@@ -211,17 +249,15 @@ class BuildGraph:
         dag.visit(self._tree)
         return dag
         
-
-    def _update_task_fn_information(self, tasks: list[Task], dag: BuildDAG):
-        for task in tasks:
+    def _update_task_fn_information(self, dag: BuildDAG):
+        for task in self.tasks:
             if task.task_name in dag.kwargs:
                 task.fn_kwargs = dag.kwargs[task.task_name]
             
             if task.task_name in dag.output_variables:
                 task.output_variables = dag.output_variables[task.task_name]
 
-            
-            
+
     def _add_edges(self, graph: Graph, dag: BuildDAG):
         for edge, variables in dag.edges.items():
             graph.add_edge(variables, edge)

@@ -26,6 +26,7 @@ class ExecutionContext:
         # TODO: Create a logger
     
     def register_flow(self, fn: Callable):
+        # print("Registering: ", fn.__name__)
         self.flow_fn = fn
     
     def register_task(self, task: Task):

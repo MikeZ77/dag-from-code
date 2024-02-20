@@ -8,7 +8,7 @@ from engine.pool import ProcessPool
     
 # TODO: Just like a Task has a state_handler, the flow can have a terminal_state_handler.
 class Flow:
-    def __init__(self, flow_name: str, graph: Graph, process_pool: ProcessPool, flow_input = dict()):
+    def __init__(self, flow_name: str, graph: Graph, process_pool: ProcessPool, flow_input):
         self.flow_name = flow_name
         self.flow_input = flow_input
         self.graph = graph._graph
@@ -92,8 +92,6 @@ class Flow:
                 if self.flow_run_complete():
                     break
                 
-    
-if __name__ == "__main__":
-      import engine      
+
 
 

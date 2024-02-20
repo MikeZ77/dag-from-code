@@ -79,16 +79,20 @@ class Task:
     
     def _translate_args(self, inputs: TaskInput):
         parameters = signature(self.fn).parameters.values()
-        params = (param for param in parameters if param.kind in (Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD))
+        var_positional_idx = next((idx for idx, param in enumerate(parameters) if param.kind == Parameter.VAR_POSITIONAL), -1) 
+        params = ((idx, param) for idx, param in enumerate(parameters) if param.kind in (Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD, Parameter.VAR_POSITIONAL))
         
-        for pos_arg in self.inputs:
-            if (next_param := next(params, None)) and pos_arg not in self.fn_kwargs:
+        for pos_arg in (input for input in self.inputs if input not in self.fn_kwargs):
+            idx, param = next(params)
+
+            if param.kind in (Parameter.POSITIONAL_ONLY, Parameter.VAR_POSITIONAL):
+                inputs.args.append(self.inputs[pos_arg])
                 
-                if next_param.kind == Parameter.POSITIONAL_ONLY:
-                    inputs.args.append(self.inputs[pos_arg])
-                    
-                if next_param.kind == Parameter.POSITIONAL_OR_KEYWORD:
-                    inputs.kwargs[next_param.name] = self.inputs[pos_arg]
+            elif param.kind == Parameter.POSITIONAL_OR_KEYWORD and idx < var_positional_idx:
+                inputs.args.append(self.inputs[pos_arg])
+                
+            elif param.kind == Parameter.POSITIONAL_OR_KEYWORD:
+                inputs.kwargs[param.name] = self.inputs[pos_arg]
 
         return inputs
         

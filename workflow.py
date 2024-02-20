@@ -7,100 +7,64 @@ from engine.engine import flow, task
 # TODO: A task can also be a class. This would allow more complicated behavior and state ...
 #       must implement a run() method so the task runner can execute it.
 # @task(deps=[])
-# @task should register this function as a task
+
+# from functools import reduce
+
+# class SomeClass:
+#     ...
+
+# def not_a_task(b):
+#     print("not_a_task")
+#     return b
+
+# @task  
+# def task_1():
+#     print("task_1")
+#     return 1
 
 # @task
-# def task_1(input):
-#     print("Task_1")
-#     return input + 1
-
-# @task
-# def task_2(a):
-#     print("Task_2")
-#     return 1, 2
-
-# @task
-# def task_3(input):
-#     print("Task_3")
-
-# @task
-# def task_4(b, c):
-#     print(b, c)
-
-# @task
-# def task_5():
-#     print("I do nothing")
-
-# @flow(draw=False, cpu_cores=4)
-# def workflow(input: int = 2):
-#     a = task_1(input)
-#     b, c = task_2(a)
-#     task_3(input)
-#     task_4(b, c)
-#     task_5()
+# def task_2(b):
+#     print("task_2")
     
     
-@task
-def create_outputs():
-    return 1, 2, 3, 4
+# @flow
+# def workflow():
+#     my_var, abc = "x", "y"
+#     xyz, d = [SomeClass(), reduce()]
+#     tt = reduce
+#     a = task_1()
+#     b = not_a_task(a)
+#     task_2(b)
 
-
-@task
-def output_name_is_input_name(one):
-    print("output_name_is_input_name")
-    print(one)
-
-
-@task
-def optional_kwarg(first):
-    print("optional_kwarg")
-    print(first)
-
+# if __name__ == "__main__":
+#     workflow()
 
 @task
-def output_is_not_input_name(first):
-    print("output_is_not_input_name")
-    print(first)
-
-
-@task
-def arbitrary_args_and_kwargs(one, two_arg, three_kw, four_kw):
-    print("arbitrary_args_and_kwargs")
-    assert one == 1
-    assert two_arg == 2
-    assert three_kw == 3
-    assert four_kw == 4
-    print(one, two_arg, three_kw, four_kw)
-
+def step_1():
+    print("Input", None)
+    return "a"
 
 @task
-def args_and_kwargs(one, /, two_arg, *, three_kw, four_kw):
-    print("args_and_kwargs")
-    print(one, two_arg, three_kw, four_kw)
+def step_2(a):
+    print("Input", a)
+    return "b"
 
-# # @task
-# # def kwargs_task(**kwargs):
-# #     print("kwargs_task")
-# #     print(kwargs)
+@task
+def step_3(b):
+    print("Input", b)
+    return "c"
 
-
-# # @task
-# # def args_and_kwargs_task(first, *args, third, **kwargs):
-# #     print("args_and_kwargs_task")
-# #     print(first, args, third, kwargs)
-
-
-@flow(cpu_cores=6)
+@task
+def step_4(c):
+    print("Input", c)
+    print(c)
+    
+@flow()
 def workflow():
-    one, two, three, four = create_outputs()
-    output_name_is_input_name(one)
-    optional_kwarg(first=one)
-    output_is_not_input_name(one)
-    arbitrary_args_and_kwargs(one, two, three_kw=three, four_kw=four)
-    args_and_kwargs(one, two, three_kw=three, four_kw=four)
-    
+    a = step_1()
+    b = step_2(a)
+    c = step_3(b)
+    step_4(c)
 
-  
 if __name__ == "__main__":
     workflow()
-

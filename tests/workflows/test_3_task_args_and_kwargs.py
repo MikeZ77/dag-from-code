@@ -7,37 +7,62 @@ def create_outputs():
 
 @task
 def output_name_is_input_name(one):
+    print("output_name_is_input_name")
     print(one)
 
 
-def output_does_is_not_input_name(first):
+@task
+def optional_kwarg(first):
+    print("optional_kwarg")
     print(first)
 
 
 @task
-def args_task(*args):
-    print(args)
-    
-    
+def output_is_not_input_name(first):
+    print("output_is_not_input_name")
+    print(first)
+
+
 @task
-def kwargs_task(**kwargs):
+def positional_only_args_and_kwargs(one, two_arg, three_kw, four_kw):
+    print("arbitrary_args_and_kwargs")
+    assert one == 1
+    assert two_arg == 2
+    assert three_kw == 3
+    assert four_kw == 4
+    print(one, two_arg, three_kw, four_kw)
+
+
+@task
+def args_and_kwargs(one, /, two_arg, *, three_kw, four_kw):
+    print("args_and_kwargs")
+    print(one, two_arg, three_kw, four_kw)
+
+@task
+def arbitrary_kwargs(**kwargs):
+    print("arbitrary_kwargs")
     print(kwargs)
 
 
-@task()
-def args_and_kwargs_task(first, *args, third, **kwargs):
-    print(first, args, third, kwargs)
+@task
+def arbitrary_args_and_kwargs(first, *args, three_kw, **kwargs):
+    print("args_and_kwargs_task")
+    print(first, args, three_kw, kwargs)
 
 
-@flow()
+@flow(cpu_cores=6)
 def workflow():
     one, two, three, four = create_outputs()
     output_name_is_input_name(one)
-    output_does_is_not_input_name(one)
-    args_task(one, two, three)
-    kwargs_task(one, two, three)
-    args_and_kwargs_task(one, two, three=three, four=four)
+    optional_kwarg(first=one)
+    output_is_not_input_name(one)
+    args_and_kwargs(one, two, three_kw=three, four_kw=four)
+    positional_only_args_and_kwargs(one, two, three_kw=three, four_kw=four)
+    arbitrary_args_and_kwargs(one, two, three_kw=three, four_kw=four)
     
+    # Alternatively can be called like this:    
+    # arbitrary_args_and_kwargs(first=one, three_kw=three, four_kw=four)
+
     
 def test_task_args_and_kwargs():
     workflow()    
