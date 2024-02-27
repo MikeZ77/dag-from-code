@@ -15,7 +15,7 @@ from engine.graph import BuildGraph
 def task(__fn):
     # TODO: This should create the Task but for now lets just register the task fn
     # TODO: Validate a task is not being called from within a task
-
+    
     task = Task(__fn.__name__, __fn)
     ctx.register_task(task)
     return __fn

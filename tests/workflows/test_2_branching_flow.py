@@ -1,29 +1,21 @@
 from engine.engine import flow, task
 
-@task
 def task_1(input):
-    print("Task_1", input)
     return input + 1
 
-@task
 def task_2(a):
-    print("Task_2", a)
+    assert a == 3
     return 1, 2
 
-@task
 def task_3(input):
-    print("Task_3", input)
+    assert input == 2
 
-@task
 def task_4(b, c):
     assert b == 1 and c == 2
-    print("Task_4", b, c)
 
-@task
 def task_5():
-    print("I do nothing")
+    ...
 
-@flow()
 def workflow(input: int = 2):
     a = task_1(input)
     b, c = task_2(a)
@@ -33,4 +25,9 @@ def workflow(input: int = 2):
     
     
 def test_banching_workflow():
-    workflow(2)
+    task(task_1)
+    task(task_2)
+    task(task_3)
+    task(task_4)
+    task(task_5)
+    flow(workflow)(2)

@@ -4,6 +4,7 @@
 
 import ast
 import inspect
+import textwrap
 
 from graphviz import Digraph
 from typing import Type
@@ -110,6 +111,9 @@ class ValidateDAG(ast.NodeVisitor):
         self.module_tree = module_tree
         self.flow_lineno = self._get_flow_func_lineno()
 
+    # TODO: Get registered tasks and make sure a task is not called inside it.
+    # TODO: Make sure tasks are not passed as callable args.
+    
     def _get_flow_func_lineno(self):
         for node in ast.walk(self.module_tree):
             if isinstance(node, ast.FunctionDef) and node.name == self.flow_name:
@@ -123,15 +127,15 @@ class ValidateDAG(ast.NodeVisitor):
         if isinstance(assignor, ast.Tuple) or isinstance(assignor, ast.List):
             if any(isinstance(elt, ast.Call) for elt in assignor.elts):
                 raise MultipleCallsInsideIterable(message="Multiple calls inside iterable.", 
-                                    lineno=lineno, 
-                                    additional_info="A single task can only be called per line."
+                                    additional_info="A single task can only be called per line.",
+                                    lineno=lineno 
                                 )
         
         if isinstance(assignor, ast.Call) and assignor.func.id not in self.task_names:
             lineno = lineno
             raise UnregisteredTaskCalled(message=f"Unregsitered callable {assignor.func.id} called inside flow scope.", 
-                                   lineno=lineno, 
-                                   additional_info="Functions or classes called inside the flow scope must be registered @task or task(fn)"
+                                   additional_info="Functions or classes called inside the flow scope must be registered @task or task(fn)",
+                                   lineno=lineno
                                 )
                 
 
@@ -215,13 +219,13 @@ class BuildGraph:
         module_source_code = inspect.getsource(flow_module)
         flow_source_code = inspect.getsource(ctx.flow_fn)
         self.flow_name = ctx.flow_fn.__name__
-        self._tree = ast.parse(flow_source_code)
+        self._tree = ast.parse(textwrap.dedent(flow_source_code))
         self._module_tree = ast.parse(module_source_code)
         self.tasks = list(ctx.tasks.values())
         self._dag_builder = dag_builder
         self._dag_validator = dag_validator
-        # print(ast.dump(self._tree, indent=4))
-        # print()
+        print(ast.dump(self._tree, indent=4))
+        print()
         
     @classmethod
     def from_code(cls):

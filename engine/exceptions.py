@@ -9,8 +9,9 @@ class FlowValidationError(Exception):
     """
     Base exception for all DAG validation errors.
     """
-    def __init__(self, *, message: str, lineno: int, additional_info: str | None):
+    def __init__(self, *, message: str, additional_info: str = None, lineno: int):
         super().__init__(message)
+        # Just output the error and not the entire traceback
         sys.tracebacklimit = 0
         self.lineno = lineno
         self.additional_info = additional_info
@@ -18,8 +19,8 @@ class FlowValidationError(Exception):
     def __str__(self):
         return  f"""
                 message={super().__str__()} 
-                lineno={self.lineno}
                 additional_info={self.additional_info}
+                lineno={self.lineno}
                 """
 
 class UnregisteredTaskCalled(FlowValidationError):
@@ -32,3 +33,5 @@ class MultipleCallsInsideIterable(FlowValidationError):
     Raised when callables are called inside an iterable in the flow scope.
     """
 
+class FlowNotFound(FlowValidationError):
+    ...

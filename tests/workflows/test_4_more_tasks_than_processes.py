@@ -1,45 +1,38 @@
+from functools import partial
+
 from engine.engine import flow, task
 
-@task
 def parent_task():
     return 1
     
-@task
 def child_task_1(input):
     return input + 1
     
     
-@task
 def child_task_2(input):
     return input + 2   
 
 
-@task
 def child_task_3(input):
     return input + 3
 
 
-@task
 def child_task_4(input):
     return input + 4
 
 
-@task
 def child_task_5(input):
     return input + 5
 
 
-@task
 def child_task_6(input):
     return input + 6
 
 
-@task
 def aggregate_task(a, b, c, d, e, f):
-    print(sum([a, b, c, d, e, f]))
+    sum([a, b, c, d, e, f])
 
 
-@flow(cpu_cores=2)
 def workflow():
     output = parent_task()
     a = child_task_1(output)
@@ -52,7 +45,14 @@ def workflow():
     
     
 def test_more_tasks_than_processes():
-    workflow()
+    task(parent_task)
+    task(child_task_1)
+    task(child_task_2)
+    task(child_task_3)
+    task(child_task_4)
+    task(child_task_5)
+    task(child_task_6)
+    task(aggregate_task)
+    flow_ = partial(flow, cpu_cores=2)
+    flow_(workflow)()
 
-if __name__ == "__main__":
-    workflow()

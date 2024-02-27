@@ -59,7 +59,7 @@ class Task:
         # We need to return a payload with the name of the variables. So the output of fn can be mapped to self.outputs.
         self.output_variables = [] # [variable_name_1, variable_name_2]
     
-     
+    
     def __eq__(self, other):
         if isinstance(other, self.__class__):
             return self.task_name == other.task_name

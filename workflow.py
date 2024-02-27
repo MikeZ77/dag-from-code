@@ -1,4 +1,4 @@
-from engine.engine import flow, task
+# from engine.engine import flow, task
 
 # TODO: It would be neat to read task comments and types and display these in a UI graph (if a UI is ever built)
 # TODO: Maybe we can "inject" deps into the task i.e. create some kind of simple built in DI framework
@@ -39,32 +39,73 @@ from engine.engine import flow, task
 # if __name__ == "__main__":
 #     workflow()
 
-@task
-def step_1():
-    print("Input", None)
-    return "a"
+# def test_linear_workflow():
+#     from engine.engine import flow, task
 
-@task
-def step_2(a):
-    print("Input", a)
-    return "b"
+#     @task
+#     def step_1():
+#         print("Input", None)
+#         return "a"
 
-@task
-def step_3(b):
-    print("Input", b)
-    return "c"
+#     @task
+#     def step_2(a):
+#         print("Input", a)
+#         return "b"
 
-@task
-def step_4(c):
-    print("Input", c)
-    print(c)
-    
-@flow()
+#     @task
+#     def step_3(b):
+#         print("Input", b)
+#         return "c"
+
+#     @task
+#     def step_4(c):
+#         print("Input", c)
+#         print(c)
+        
+#     @flow()
+#     def workflow():
+#         a = step_1()
+#         b = step_2(a)
+#         c = step_3(b)
+#         step_4(c)
+        
+#     workflow()
+
+from functools import reduce, partial
+from operator import mul
+
+from engine.engine import flow, task
+
+def get_data():
+    return [1, 2, 3, 4, 5, 6, 7, 8]
+
+# Normally you can register like this, but for testing task registration needs to be out of the global scope.
+# task_mapper = task(map)
+# task_reducer = task(reduce)
+
+
+square = lambda x: x**2 # noqa
+map = lambda fn, values: [fn(val) for val in values] # noqa
+
+squarer = partial(map, square)
+reducer = partial(reduce, mul)
+
+squarer.__name__ = "square"
+reducer.__name__ = "reducer"
+
+
+def show_data(data):
+    print(data)
+
 def workflow():
-    a = step_1()
-    b = step_2(a)
-    c = step_3(b)
-    step_4(c)
-
+    data = get_data()
+    mapped_data = square(data)
+    reduced_data = reducer(mapped_data)
+    show_data(reduced_data)
+    
 if __name__ == "__main__":
-    workflow()
+    task(squarer)
+    task(reducer)
+    task(get_data)
+    task(show_data)
+    flow(workflow)()
