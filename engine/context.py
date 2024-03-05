@@ -32,6 +32,25 @@ class ExecutionContext:
     def register_task(self, task: Task):
         self.tasks[task.task_name] = task
     
+    def enumerate_tasks(self, tasks: set[str], extract_enum: Callable[[str], str]):
+        """
+        A utility method that copies initial function name and reference to an
+        enumerated task name key.
+        
+        Args:
+            tasks: Enumerated tasks constructed by BuildDAG.
+            extract_enum: How extract the task name from the enumerated task name.
+        """
+        base_tasks = set()
+        
+        for task, enum_task in zip(map(extract_enum, tasks), tasks):
+            base_task = self.tasks.get(task)
+            base_tasks.add(base_task.task_name)
+            self.tasks[enum_task] = Task(enum_task, base_task.fn)
+           
+        for base_task in base_tasks:
+            del self.tasks[base_task]
+            
     # E.g. a logger that the client can use and that automatically sends logs to the server.
     def logger():
         ...

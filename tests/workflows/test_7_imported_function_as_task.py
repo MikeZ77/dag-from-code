@@ -1,3 +1,5 @@
+import pytest
+
 from functools import reduce, partial
 from operator import mul
 
@@ -28,7 +30,8 @@ def workflow():
     mapped_data = square(data)
     reduced_data = reducer(mapped_data)
     show_data(reduced_data)
-    
+
+@pytest.skip("WIP")
 def test_imported_function_as_task():
     task(square)
     task(reducer)

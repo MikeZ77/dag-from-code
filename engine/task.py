@@ -68,7 +68,7 @@ class Task:
     def __hash__(self):
         return hash(self.task_name)
     
-    def __repr__(self):
+    def __str__(self):
         return f"""     Task(
             {self.task_name=}
             {self.inputs=}
@@ -77,6 +77,7 @@ class Task:
         )
         """
     
+    # TODO: Good candidate for unit testing
     def _translate_args(self, inputs: TaskInput):
         parameters = signature(self.fn).parameters.values()
         var_positional_idx = next((idx for idx, param in enumerate(parameters) if param.kind == Parameter.VAR_POSITIONAL), -1) 

@@ -50,7 +50,6 @@ def flow(__fn=None, *, name: str = None, cpu_cores: int = None, draw: bool = Fal
             if draw:
                 graph.draw(name)
             
-            print(ctx.tasks)
             # for task in graph._graph:
             #     print(task)
             

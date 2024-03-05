@@ -18,21 +18,43 @@ from engine.exceptions import UnregisteredTaskCalled, MultipleCallsInsideIterabl
 
 class BuildDAG(ast.NodeVisitor):
     def __init__(self):
-        
         self.head_nodes = defaultdict(list)                             # "task_2": ["a"]
         self.tail_nodes = defaultdict(list)                             # "a": ["task_3"]
         self.edges: dict[Edge, list[str]] = defaultdict(list)           # Edge(head='task_1', tail='task_2'): ['a']
         self.kwargs = defaultdict(dict)                                 # {"task_name": {kwarg_value: kwarg_name}} 
         self.output_variables = defaultdict(list)                       # {"task_name": [output_variable_name]} 
-        # TODO: Keep track of variables and handle duplcaite variables i.e. variables that a re-assigned in the flow
-        
+        self.variable_enum = defaultdict(lambda: -1)                    # {"variable": "variable_0"}
+        self.node_enum = defaultdict(int) 
+        self.flow_args = set()
+        self.nodes = set()
+    
+    def enumerate_node(self, fn_id: str) -> str:
+        fn_name = f"{fn_id}_{self.node_enum[fn_id]}"
+        self.node_enum[fn_id] += 1
+        self.nodes.add(fn_name)
+        return fn_name
+    
+    def enumerate_variable(self, name: str) -> str:
+        enum = self.variable_enum[name]
+        if isinstance(enum, str):
+            enum = int(enum[-1])
+            
+        self.variable_enum[name] = f"{name}_{enum + 1}"
+        return self.variable_enum[name]
+    
+    @staticmethod
+    def extract_enum(node: str):
+        return node[:node.rfind("_")]
+       
     def visit_FunctionDef(self, node):
         # TODO: Validate that this is a flow function
         args: ast.arguments = node.args
         fn_args: list[ast.arg] = args.args
         fn_name = node.name
         
+        # Flow paramaters are and the flow name are not enumerated
         self.head_nodes[fn_name] = [arg.arg for arg in fn_args]
+        self.flow_args = set(self.head_nodes[fn_name])
         self.generic_visit(node)
         
     def visit_Assign(self, node):
@@ -45,26 +67,31 @@ class BuildDAG(ast.NodeVisitor):
             return
         
         fn: ast.Name = assignor.func
-        fn_name = fn.id
+        fn_name = self.enumerate_node(fn.id)
         fn_args: list[ast.Name] = assignor.args
+        
+        # Check if this head node is also a tail node (has params)
+        for param in fn_args:
+            # Do not enumerate flow parameters
+            if param.id not in self.flow_args:
+                id = self.variable_enum[param.id]
+                self.tail_nodes[id].append(fn_name)
+            else:
+                self.tail_nodes[param.id].append(fn_name)
         
         # The head node has out-deg > 1
         if isinstance(assignee, ast.Tuple):
             names: list[ast.Name] = assignee.elts
-            variables = [name.id for name in names]
+            variables = [self.enumerate_variable(name.id) for name in names]
             self.head_nodes[fn_name].extend(variables)
             self.output_variables[fn_name].extend(variables)
 
         # The head node has out-deg == 1
         if isinstance(assignee, ast.Name):
-            self.head_nodes[fn_name].append(assignee.id)
-            self.output_variables[fn_name].append(assignee.id)
+            variable = self.enumerate_variable(assignee.id)
+            self.head_nodes[fn_name].append(variable)
+            self.output_variables[fn_name].append(variable)
         
-        # Check if this head node is also a tail node (has params)
-        if fn_args:
-            for param in fn_args:
-                self.tail_nodes[param.id].append(fn_name)
-            
         self.generic_visit(node)
         
     def visit_Expr(self, node):
@@ -73,25 +100,32 @@ class BuildDAG(ast.NodeVisitor):
         if not isinstance(node.value, ast.Call):
             return
         
-        func: ast.Name = node.value.func
+        fn: ast.Name = node.value.func
+        fn_name = self.enumerate_node(fn.id)
         fn_args: list[ast.Name] = node.value.args
         fn_kwargs: list[ast.keyword] = node.value.keywords
-        fn_name = func.id
         
         # we get the tail node arg so it can be mapped back to the value of the head node output
-        if fn_args:
-            for arg in fn_args:
+        for arg in fn_args:
+            # Do not enumerate flow parameters
+            if arg.id not in self.flow_args:
+                id = self.variable_enum[arg.id]
+                self.tail_nodes[id].append(fn_name)
+            else:
                 self.tail_nodes[arg.id].append(fn_name)
-        
-        # tail node kwarg 
-        if fn_kwargs:
-            # get the kwarg value so it can be mapped back to the value of the head node output
-            for kwarg in fn_kwargs:
-                self.tail_nodes[kwarg.value.id].append(fn_name)
-
+                
+        # get the kwarg value so it can be mapped back to the value of the head node output
+        for kwarg in fn_kwargs:
+            # Do not enumerate flow parameters
+            if kwarg.value.id not in self.flow_args:
+                id = self.variable_enum[kwarg.value.id]
+                self.tail_nodes[id].append(fn_name)
                 # keep track of the kwarg name for task input
-                self.kwargs[func.id][kwarg.value.id] = kwarg.arg
-            
+                self.kwargs[fn_name][id] = kwarg.arg
+            else:
+                self.tail_nodes[kwarg.value.id].append(fn_name)
+                self.kwargs[fn_name][kwarg.value.id] = kwarg.arg
+                
         self.generic_visit(node)
     
     def construct_edges(self):
@@ -221,7 +255,6 @@ class BuildGraph:
         self.flow_name = ctx.flow_fn.__name__
         self._tree = ast.parse(textwrap.dedent(flow_source_code))
         self._module_tree = ast.parse(module_source_code)
-        self.tasks = list(ctx.tasks.values())
         self._dag_builder = dag_builder
         self._dag_validator = dag_validator
         print(ast.dump(self._tree, indent=4))
@@ -230,20 +263,21 @@ class BuildGraph:
     @classmethod
     def from_code(cls):
         graph_build = cls(BuildDAG, ValidateDAG)
-        graph = graph_build._build_graph()
         graph_build._validate_flow()
         dag = graph_build._build_dag()
+        graph = graph_build._build_graph(dag)
         dag.construct_edges()
         graph_build._update_task_fn_information(dag)
         graph_build._add_edges(graph, dag)
         return graph
         
     
-    def _build_graph(self) -> Graph:
-        return Graph(self.tasks)
+    def _build_graph(self, dag: BuildDAG) -> Graph:
+        ctx.enumerate_tasks(dag.nodes, dag.extract_enum)
+        return Graph(ctx.tasks.values())
         
     def _validate_flow(self):
-        task_names = [task.task_name for task in self.tasks]
+        task_names = [task.task_name for task in ctx.tasks.values()]
         valid_dag = self._dag_validator(task_names, self.flow_name, self._module_tree)
         valid_dag.visit(self._tree)
         
@@ -254,13 +288,12 @@ class BuildGraph:
         return dag
         
     def _update_task_fn_information(self, dag: BuildDAG):
-        for task in self.tasks:
+        for task in ctx.tasks.values():
             if task.task_name in dag.kwargs:
                 task.fn_kwargs = dag.kwargs[task.task_name]
             
             if task.task_name in dag.output_variables:
                 task.output_variables = dag.output_variables[task.task_name]
-
 
     def _add_edges(self, graph: Graph, dag: BuildDAG):
         for edge, variables in dag.edges.items():
